@@ -1,0 +1,7 @@
+# Môi trường phát triển và khảo sát dữ liệu (Python 3.12)
+numpy==2.5.3
+pandas==3.0.6
+wfdb==4.3.1
+matplotlib==3.11.2
+pytest==9.1.1
+ruff==0.16.9

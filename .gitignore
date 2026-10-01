@@ -1,0 +1,17 @@
+# Môi trường Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# Bí mật và cấu hình cục bộ (chỉ commit .env.example)
+.env
+
+# Dữ liệu: không commit vào git (từ tuần 2 do DVC quản lý)
+/data/
+
+# Kết quả chạy cục bộ
+mlruns/
+outputs/
+*.log
