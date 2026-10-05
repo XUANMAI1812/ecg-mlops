@@ -165,35 +165,32 @@ ruff format --check src tests
 định dạng. Các test này dùng dữ liệu giả lập nên không thay thế bước khảo sát trên dữ liệu
 thật ở mục 8.
 
-## 7. Tải dữ liệu PTB-XL v1.0.3
+## 7. Lấy dữ liệu PTB-XL v1.0.3 qua DVC
 
-Nguồn: <https://physionet.org/content/ptb-xl/1.0.3/> (giấy phép CC BY 4.0, ai cũng tải được,
-không cần credentialing). Dung lượng giải nén theo trang dataset: 3,0 GB. Dữ liệu KHÔNG nằm
-trong git (thư mục `data/` bị `.gitignore` chặn), nên mỗi người tự tải một lần trên máy mình.
+Nguồn gốc dữ liệu: <https://physionet.org/content/ptb-xl/1.0.3/> (giấy phép CC BY 4.0). Dữ liệu
+không nằm trực tiếp trong git — được quản lý bằng DVC, lưu thật trên AWS S3; git chỉ theo dõi
+file con trỏ nhỏ `data/raw/ptb-xl.dvc` (đã có sẵn khi `git clone` ở mục 4).
+
+Xin access key (access key ID + secret access key) từ người quản lý AWS của nhóm, qua kênh an
+toàn (chat riêng, không dán vào file repo hoặc gửi qua commit message). Cấu hình key — lệnh
+`--local` ghi vào `.dvc/config.local`, file này không commit vào git:
 
 ```bash
-df -h ~
-mkdir -p data/raw
-wget -r -N -c -np -nH --cut-dirs=3 -P data/raw/ptb-xl \
-  https://physionet.org/files/ptb-xl/1.0.3/
+dvc remote modify --local s3remote access_key_id '<ACCESS_KEY_ID_CỦA_BẠN>'
+dvc remote modify --local s3remote secret_access_key '<SECRET_ACCESS_KEY_CỦA_BẠN>'
 ```
 
-Nếu bị ngắt giữa chừng, chạy lại đúng lệnh trên để tiếp tục tải. Kết quả nằm trong
-`data/raw/ptb-xl/`, gồm `records100/`, `records500/`, `ptbxl_database.csv`,
+Kéo dữ liệu từ S3:
+
+```bash
+dvc pull
+ls data/raw/ptb-xl
+```
+
+Đạt khi `ls` cho ra đủ: `records100/`, `records500/`, `ptbxl_database.csv`,
 `scp_statements.csv`, `SHA256SUMS.txt`, `example_physionet.py`, `LICENSE.txt`, `RECORDS`,
-hai file changelog và vài file `index.html` do `wget` sinh ra (bỏ qua).
-
-Kiểm tra toàn vẹn bằng file checksum đi kèm dataset:
-
-```bash
-cd data/raw/ptb-xl
-sha256sum -c SHA256SUMS.txt --quiet && echo "SHA256 OK"
-cd ../../..
-```
-
-Không in gì ngoài dòng `SHA256 OK` là đạt. Bất kỳ dòng `FAILED` nào nghĩa là file đó tải lỗi;
-xóa file đó rồi chạy lại lệnh tải. Nếu `sha256sum` báo `improperly formatted`, chạy
-`head -3 data/raw/ptb-xl/SHA256SUMS.txt` và báo lại cho nhóm.
+hai file changelog. DVC tự kiểm tra tính toàn vẹn qua hash nội dung khi `pull`, không cần chạy
+`sha256sum` thủ công.
 
 Cấu hình đường dẫn dữ liệu:
 
@@ -211,7 +208,11 @@ lại mỗi khi mở terminal mới (hoặc truyền `--data-dir` thay thế). K
 
 ### 8.1 Đọc thử một bản ghi
 
+Nếu đang ở phiên terminal mới thì venv chưa được kích hoạt lại — kích hoạt trước (thiếu bước
+này, lệnh `python` báo `Command 'python' not found`, chỉ `python3` có sẵn trên hệ thống):
+
 ```bash
+source .venv/bin/activate
 PYTHONPATH=src python -m ecg.data.load --ecg-id 1
 ```
 
@@ -263,62 +264,22 @@ ra ở mục 8.2; nếu lệch, ghi cả hai con số và báo nhóm, không t�
 Trang dataset cũng ghi mọi bản ghi của một bệnh nhân nằm cùng một fold (nên "số fold tối đa
 của một bệnh nhân" kỳ vọng là 1), và fold 9, 10 đã qua ít nhất một lần đánh giá của bác sĩ.
 
-## 9. Cấu trúc repo và vai trò từng file
-
-```text
-ecg-mlops/
-├── README.md
-├── .gitignore
-├── .env.example
-├── requirements/
-│   └── dev.txt
-├── src/ecg/
-│   ├── __init__.py
-│   └── data/
-│       ├── __init__.py
-│       ├── load.py
-│       └── labels.py
-├── tests/unit/
-│   ├── test_load.py
-│   └── test_labels.py
-└── docs/
-    └── setup.md
-```
-
-Không nằm trong git (mỗi người tự tạo trên máy): `.venv/` (môi trường Python), `.env` (cấu
-hình cục bộ), `data/` (dữ liệu PTB-XL).
-
-| File | Vai trò |
-|---|---|
-| `README.md` | Giới thiệu ngắn về dự án, trỏ tới tài liệu này. |
-| `.gitignore` | Danh sách file/thư mục git bỏ qua: `.venv/`, cache của Python/pytest/ruff, `.env`, `/data/`, kết quả chạy cục bộ (`mlruns/`, `outputs/`, `*.log`). Dòng `/data/` có dấu `/` ở đầu nên chỉ chặn thư mục `data/` ở gốc repo, không chặn `src/ecg/data/`. |
-| `.env.example` | Mẫu cấu hình. Sao chép thành `.env` rồi chỉnh nếu cần. Hiện chỉ có `PTBXL_DIR` (thư mục chứa PTB-XL, mặc định `data/raw/ptb-xl`, tính từ gốc repo). Chỉ file mẫu này được commit, không commit `.env`. |
-| `requirements/dev.txt` | Thư viện ghim phiên bản cho môi trường phát triển và khảo sát: numpy, pandas, wfdb (đọc file WFDB `.dat`/`.hea`), matplotlib (chưa được code hiện tại dùng), pytest (chạy test), ruff (kiểm tra và định dạng code). |
-| `src/ecg/__init__.py`, `src/ecg/data/__init__.py` | File rỗng để Python nhận `ecg` và `ecg.data` là package; nhờ đó chạy được `python -m ecg.data.load`. |
-| `src/ecg/data/load.py` | Đọc dữ liệu: `load_metadata` đọc `ptbxl_database.csv` (chỉ mục `ecg_id`, cột `scp_codes` được đổi thành dict, kiểm tra đủ cột cần thiết); `load_scp_statements` đọc `scp_statements.csv`; `load_record` đọc một bản ghi WFDB; `validate_signal` và `load_validated_record` kiểm tra shape, tần số lấy mẫu, số chuyển đạo, NaN/inf. Chạy trực tiếp (`python -m ecg.data.load`) sẽ in thông tin một bản ghi. |
-| `src/ecg/data/labels.py` | Gán nhãn và thống kê: `build_code_to_superclass` tạo bảng tra mã SCP → superclass; `add_superclass_column` thêm cột `diagnostic_superclass`; `count_superclasses` đếm theo 5 lớp NORM, MI, STTC, CD, HYP; `summarize` tính các con số khảo sát (số bản ghi, bệnh nhân, fold, bản ghi không nhãn, đa nhãn). Chạy trực tiếp (`python -m ecg.data.labels`) sẽ in bảng thống kê. |
-| `tests/unit/test_load.py` | Kiểm thử `load.py` trên một dataset giả có cùng cấu trúc PTB-XL (1 bản ghi), gồm các trường hợp lỗi: thiếu file, file hỏng, sai độ dài, sai số chuyển đạo, sai `fs`, có NaN/inf. |
-| `tests/unit/test_labels.py` | Kiểm thử `labels.py` trên bảng metadata giả nhỏ: chỉ giữ mã chẩn đoán, cột superclass được sắp xếp và không trùng, không sửa dữ liệu đầu vào, đếm đúng 5 lớp. |
-| `docs/setup.md` | Tài liệu này. |
-
-Quy ước: file `.md` của repo (trừ `README.md`) nằm trong `docs/`. Theo kế hoạch, các thư mục
-khác (`flows/`, `scripts/`, `docker/`, `.github/workflows/`, ...) sẽ được thêm khi đến các tuần
-tương ứng; hiện chưa có trong repo.
-
-## 10. Xử lý sự cố nhanh
+## 9. Xử lý sự cố nhanh
 
 | Triệu chứng | Hướng xử lý |
 |---|---|
 | `Permission denied (publickey)` khi clone | Chưa thêm SSH key vào GitHub, chưa chấp nhận lời mời collaborator, hoặc chưa chạy `ssh-add`. Chạy lại mục 4.1, 4.3, 4.4 |
 | `docker: permission denied` | Chưa vào lại phiên sau `usermod -aG docker`; thoát và đăng nhập lại (hoặc khởi động lại máy) |
 | `externally-managed-environment` | Chưa kích hoạt venv: `source .venv/bin/activate` |
+| `Command 'python' not found` | Chưa kích hoạt venv trong phiên này: `source .venv/bin/activate` (lệnh `python` chỉ có khi venv active, hệ thống chỉ có `python3`) |
 | `ModuleNotFoundError: ecg` | Chạy từ thư mục gốc repo và thêm `PYTHONPATH=src` trước lệnh |
 | `Không thấy .../ptbxl_database.csv` | `PTBXL_DIR` chưa được nạp hoặc sai. Chạy `echo "$PTBXL_DIR"`, hoặc truyền `--data-dir` |
-| `wget` dừng giữa chừng | Chạy lại đúng lệnh (đã có `-N -c` để tiếp tục) |
-| `sha256sum` báo `FAILED` | Xóa file bị báo, chạy lại lệnh tải |
+| `dvc pull` báo `AccessDenied` | Access key chưa đúng hoặc chưa cấu hình — hỏi lại người quản lý AWS, chạy lại `dvc remote modify --local` ở mục 7 |
+| `dvc pull` báo không thấy remote / lỗi đọc `.dvc/config` | Kiểm tra `dvc remote list`; đảm bảo đã `git clone`/`git pull` đầy đủ để có `.dvc/config` |
+| `dvc: command not found` | Chưa kích hoạt venv (`source .venv/bin/activate`) hoặc `pip install -r requirements/dev.txt` chưa chạy xong |
 | Đĩa đầy | `df -h /`, `docker system df`; mở rộng ổ đĩa |
 
-## 11. Trích dẫn dữ liệu
+## 10. Trích dẫn dữ liệu
 
 - Wagner, P., Strodthoff, N., Bousseljot, R., Samek, W., & Schaeffter, T. (2022). PTB-XL, a
   large publicly available electrocardiography dataset (version 1.0.3). PhysioNet.
