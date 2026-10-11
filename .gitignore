@@ -12,3 +12,4 @@ __pycache__/
 mlruns/
 outputs/
 *.log
+reports/
