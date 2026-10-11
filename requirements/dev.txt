@@ -6,3 +6,4 @@ matplotlib==3.11.2
 pytest==9.1.1
 ruff==0.16.9
 scipy==1.18.1
+dvc[s3]==3.67.1
