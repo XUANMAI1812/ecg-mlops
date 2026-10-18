@@ -289,6 +289,39 @@ Dừng server: `pkill -f "[m]lflow server"`. Server không tự chạy lại sau
 
 Dữ liệu của server nằm trong `mlflow_data/` (đã gitignore). Xoá thư mục này là xoá toàn bộ lịch sử run.
 
+### 9.1 Chạy train và ghi log vào MLflow
+
+Điều kiện: server MLflow đang chạy (mục 9), dữ liệu PTB-XL đã `dvc pull` về `data/raw/ptb-xl` (mục 7), venv đã kích hoạt.
+
+Cài PyTorch bản CPU (máy không có GPU), rồi kiểm tra:
+
+    pip install torch==2.14.1 --index-url https://download.pytorch.org/whl/cpu
+    python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
+
+Kết quả đúng: `2.14.1+cpu False`. Không chạy `pip install torch==2.14.1` mặc định, vì lệnh đó có thể tải bản CUDA rất nặng.
+
+Chạy train ở chế độ nền (đóng cửa sổ SSH không làm dừng):
+
+    export MLFLOW_DISABLE_TELEMETRY=true
+    mkdir -p artifacts
+    nohup env PYTHONPATH=src PYTHONUNBUFFERED=1 python -m ecg.models.train --epochs 2 --batch-size 16 --run-name baseline-2ep > artifacts/train-2ep.log 2>&1 &
+
+Theo dõi bằng `tail -3 artifacts/train-2ep.log`. Mỗi epoch in một dòng `Epoch k/2 | train_loss=... | val_loss=... | val_macro_f1=...`; khi xong in `MLflow run: <run_id>`. Trên `ecg-vm` (4 CPU, không GPU), 2 epoch với batch 16 mất khoảng 14 phút.
+
+Ba tham số ghi log: `--tracking-uri` (mặc định lấy biến môi trường `MLFLOW_TRACKING_URI`, nếu không có thì `http://127.0.0.1:5000`), `--experiment` (mặc định `ecg-superdiagnostic`), `--run-name`. Server chưa chạy thì script dừng ngay với thông báo `Không kết nối được MLflow`.
+
+### 9.2 Kiểm tra run trên giao diện
+
+Mở SSH tunnel (mục 9), vào http://127.0.0.1:5000, chọn experiment `ecg-superdiagnostic` rồi chọn run vừa tạo. Run đạt khi:
+
+- Status là Finished.
+- Params có `epochs`, `batch_size`, `learning_rate`, `seed`, `data_dir`, `n_train`, `n_val`, `n_test`, `device`, `torch_version`.
+- Metrics `train_loss`, `val_loss`, `val_macro_f1` có từ 2 điểm (mỗi epoch một điểm).
+- Artifacts có `metrics/history.json` và `metrics/test_metrics.json`.
+- Run có một logged model tên `model`.
+
+Lỗi thường gặp: `Không kết nối được MLflow` nghĩa là server chưa chạy (chạy lại lệnh ở mục 9); `python` hoặc `pytest` báo `not found` nghĩa là chưa kích hoạt venv.
+
 ## 10. Xử lý sự cố nhanh
 
 | Triệu chứng | Hướng xử lý |
