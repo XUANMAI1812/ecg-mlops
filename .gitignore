@@ -13,6 +13,7 @@ mlruns/
 outputs/
 *.log
 reports/
+mlflow_data/
 
 # Local model training artifacts
 artifacts/

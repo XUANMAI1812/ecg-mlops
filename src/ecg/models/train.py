@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import random
 from pathlib import Path
 
@@ -15,6 +16,10 @@ from torch.utils.data import DataLoader
 from ecg.data.dataset import ECGDataset
 from ecg.data.labels import SUPERCLASSES
 from ecg.models.cnn1d import ECG1DCNN
+from ecg.train.tracking import RunTracker
+
+DEFAULT_TRACKING_URI = "http://127.0.0.1:5000"
+INPUT_SHAPE = (12, 1000)  # 12 chuyển đạo, 10 giây ở 100 Hz; không gồm batch
 
 
 def set_seed(seed: int) -> None:
@@ -99,11 +104,22 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--learning-rate", type=float, default=1e-3)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--tracking-uri",
+        default=os.environ.get("MLFLOW_TRACKING_URI", DEFAULT_TRACKING_URI),
+    )
+    parser.add_argument("--experiment", default="ecg-superdiagnostic")
+    parser.add_argument("--run-name", default=None)
     args = parser.parse_args()
 
     if args.epochs < 1 or args.batch_size < 1:
         parser.error("--epochs và --batch-size phải >= 1")
 
+    with RunTracker(args.tracking_uri, args.experiment, args.run_name) as tracker:
+        train(args, tracker)
+
+
+def train(args: argparse.Namespace, tracker: RunTracker) -> None:
     set_seed(args.seed)
     torch.set_num_threads(2)
     device = torch.device("cpu")
@@ -142,6 +158,26 @@ def main() -> None:
     print(f"Batch size: {args.batch_size}; epochs: {args.epochs}")
     print(f"Superclass order: {SUPERCLASSES}")
 
+    tracker.set_tags({"model": "cnn1d", "task": "superdiagnostic"})
+    tracker.log_params(
+        {
+            "epochs": args.epochs,
+            "batch_size": args.batch_size,
+            "learning_rate": args.learning_rate,
+            "seed": args.seed,
+            "data_dir": str(data_dir),
+            "n_train": len(train_ds),
+            "n_val": len(val_ds),
+            "n_test": len(test_ds),
+            "device": str(device),
+            "torch_version": torch.__version__,
+        }
+    )
+    # File DVC của dữ liệu (chứa hash phiên bản), nếu có; để truy vết run dùng dữ liệu nào.
+    dvc_file = Path(f"{data_dir}.dvc")
+    if dvc_file.exists():
+        tracker.log_artifact(str(dvc_file), "data")
+
     model = ECG1DCNN().to(device)
     criterion = nn.BCEWithLogitsLoss()
     optimizer = torch.optim.Adam(
@@ -176,6 +212,18 @@ def main() -> None:
             f"val_loss={val_loss:.4f} | "
             f"val_macro_f1={val_metrics['macro_f1']:.4f}"
         )
+        tracker.log_epoch(
+            epoch,
+            {
+                "train_loss": train_loss,
+                "val_loss": val_loss,
+                "val_macro_f1": val_metrics["macro_f1"],
+                **{
+                    f"val_f1_{name}": score
+                    for name, score in val_metrics["per_class_f1"].items()
+                },
+            },
+        )
 
         if val_loss < best_val_loss:
             best_val_loss = val_loss
@@ -193,6 +241,7 @@ def main() -> None:
 
     with (output_dir / "history.json").open("w", encoding="utf-8") as file:
         json.dump(history, file, ensure_ascii=False, indent=2)
+    tracker.log_artifact(str(output_dir / "history.json"), "metrics")
 
     # Evaluate the selected checkpoint on the test fold only after training.
     checkpoint = torch.load(
@@ -217,6 +266,21 @@ def main() -> None:
         "w", encoding="utf-8"
     ) as file:
         json.dump(results, file, ensure_ascii=False, indent=2)
+    tracker.log_artifact(str(output_dir / "test_metrics.json"), "metrics")
+    tracker.log_summary(
+        {
+            "best_epoch": checkpoint["epoch"],
+            "best_val_loss": best_val_loss,
+            "test_loss": test_loss,
+            "test_macro_f1": test_metrics["macro_f1"],
+            **{
+                f"test_f1_{name}": score
+                for name, score in test_metrics["per_class_f1"].items()
+            },
+        }
+    )
+    # Model đã nạp checkpoint tốt nhất ở trên; log lên MLflow ở dạng logits.
+    tracker.log_model(model, input_shape=INPUT_SHAPE)
 
     print("\nTest results (fold 10):")
     print(f"test_loss={test_loss:.4f}")
@@ -227,6 +291,7 @@ def main() -> None:
     print(f"\nCheckpoint: {checkpoint_path}")
     print(f"History: {output_dir / 'history.json'}")
     print(f"Test metrics: {output_dir / 'test_metrics.json'}")
+    print(f"MLflow run: {tracker.run_id}")
 
 
 if __name__ == "__main__":

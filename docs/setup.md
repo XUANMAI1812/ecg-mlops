@@ -264,7 +264,32 @@ ra ở mục 8.2; nếu lệch, ghi cả hai con số và báo nhóm, không t�
 Trang dataset cũng ghi mọi bản ghi của một bệnh nhân nằm cùng một fold (nên "số fold tối đa
 của một bệnh nhân" kỳ vọng là 1), và fold 9, 10 đã qua ít nhất một lần đánh giá của bác sĩ.
 
-## 9. Xử lý sự cố nhanh
+## 9. MLflow tracking server (cục bộ, dùng cho huấn luyện)
+
+Server chạy trên máy huấn luyện, chỉ nhận kết nối từ chính máy đó (127.0.0.1). Không mở cổng này ra ngoài.
+
+Chạy từ thư mục gốc của repo (đường dẫn trong lệnh là đường dẫn tương đối):
+
+    source .venv/bin/activate
+    mkdir -p mlflow_data
+    export MLFLOW_DISABLE_TELEMETRY=true
+    nohup mlflow server \
+      --backend-store-uri sqlite:///mlflow_data/mlflow.db \
+      --artifacts-destination ./mlflow_data/artifacts \
+      --host 127.0.0.1 --port 5000 --workers 1 \
+      > mlflow_data/server.log 2>&1 &
+
+Kiểm tra: `curl -s http://127.0.0.1:5000/health` in `OK`.
+
+Xem giao diện từ máy khác: mở SSH tunnel từ máy cá nhân, rồi vào http://127.0.0.1:5000
+
+    ssh -L 5000:127.0.0.1:5000 <user>@<địa chỉ máy huấn luyện>
+
+Dừng server: `pkill -f "[m]lflow server"`. Server không tự chạy lại sau khi khởi động lại máy; chạy lại lệnh ở trên.
+
+Dữ liệu của server nằm trong `mlflow_data/` (đã gitignore). Xoá thư mục này là xoá toàn bộ lịch sử run.
+
+## 10. Xử lý sự cố nhanh
 
 | Triệu chứng | Hướng xử lý |
 |---|---|
@@ -279,7 +304,7 @@ của một bệnh nhân" kỳ vọng là 1), và fold 9, 10 đã qua ít nhất
 | `dvc: command not found` | Chưa kích hoạt venv (`source .venv/bin/activate`) hoặc `pip install -r requirements/dev.txt` chưa chạy xong |
 | Đĩa đầy | `df -h /`, `docker system df`; mở rộng ổ đĩa |
 
-## 10. Trích dẫn dữ liệu
+## 11. Trích dẫn dữ liệu
 
 - Wagner, P., Strodthoff, N., Bousseljot, R., Samek, W., & Schaeffter, T. (2022). PTB-XL, a
   large publicly available electrocardiography dataset (version 1.0.3). PhysioNet.
