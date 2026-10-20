@@ -322,6 +322,16 @@ Mở SSH tunnel (mục 9), vào http://127.0.0.1:5000, chọn experiment `ecg-su
 
 Lỗi thường gặp: `Không kết nối được MLflow` nghĩa là server chưa chạy (chạy lại lệnh ở mục 9); `python` hoặc `pytest` báo `not found` nghĩa là chưa kích hoạt venv.
 
+### 9.3 Kiểm tra run bằng script
+
+Thay cho việc xem từng mục trên giao diện (9.2), chạy script từ gốc repo (venv đã kích hoạt, server đang chạy, cần PyTorch trong venv để nạp model):
+
+    python scripts/check_mlflow_run.py
+
+Mặc định script kiểm tra run mới nhất của experiment `ecg-superdiagnostic` tại `http://127.0.0.1:5000`. Tuỳ chọn: `--tracking-uri`, `--experiment`, `--run-id` (kiểm tra một run cụ thể), `--min-epochs` (số điểm tối thiểu của mỗi metric theo epoch, mặc định 2). Nếu không truyền tuỳ chọn, script đọc biến môi trường `MLFLOW_TRACKING_URI` và `EXPERIMENT`.
+
+Kết quả đúng: mọi dòng bắt đầu bằng `OK` và `echo $?` in `0`. Có dòng `LỖI` thì mã thoát là 1; không kết nối được server, hoặc không có experiment hay run, thì mã thoát là 2.
+
 ## 10. Xử lý sự cố nhanh
 
 | Triệu chứng | Hướng xử lý |
