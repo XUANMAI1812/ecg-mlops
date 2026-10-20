@@ -264,7 +264,65 @@ ra ở mục 8.2; nếu lệch, ghi cả hai con số và báo nhóm, không t�
 Trang dataset cũng ghi mọi bản ghi của một bệnh nhân nằm cùng một fold (nên "số fold tối đa
 của một bệnh nhân" kỳ vọng là 1), và fold 9, 10 đã qua ít nhất một lần đánh giá của bác sĩ.
 
-## 9. Xử lý sự cố nhanh
+## 9. MLflow tracking server (cục bộ, dùng cho huấn luyện)
+
+Server chạy trên máy huấn luyện, chỉ nhận kết nối từ chính máy đó (127.0.0.1). Không mở cổng này ra ngoài.
+
+Chạy từ thư mục gốc của repo (đường dẫn trong lệnh là đường dẫn tương đối):
+
+    source .venv/bin/activate
+    mkdir -p mlflow_data
+    export MLFLOW_DISABLE_TELEMETRY=true
+    nohup mlflow server \
+      --backend-store-uri sqlite:///mlflow_data/mlflow.db \
+      --artifacts-destination ./mlflow_data/artifacts \
+      --host 127.0.0.1 --port 5000 --workers 1 \
+      > mlflow_data/server.log 2>&1 &
+
+Kiểm tra: `curl -s http://127.0.0.1:5000/health` in `OK`.
+
+Xem giao diện từ máy khác: mở SSH tunnel từ máy cá nhân, rồi vào http://127.0.0.1:5000
+
+    ssh -L 5000:127.0.0.1:5000 <user>@<địa chỉ máy huấn luyện>
+
+Dừng server: `pkill -f "[m]lflow server"`. Server không tự chạy lại sau khi khởi động lại máy; chạy lại lệnh ở trên.
+
+Dữ liệu của server nằm trong `mlflow_data/` (đã gitignore). Xoá thư mục này là xoá toàn bộ lịch sử run.
+
+### 9.1 Chạy train và ghi log vào MLflow
+
+Điều kiện: server MLflow đang chạy (mục 9), dữ liệu PTB-XL đã `dvc pull` về `data/raw/ptb-xl` (mục 7), venv đã kích hoạt.
+
+Cài PyTorch bản CPU (máy không có GPU), rồi kiểm tra:
+
+    pip install torch==2.14.1 --index-url https://download.pytorch.org/whl/cpu
+    python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
+
+Kết quả đúng: `2.14.1+cpu False`. Không chạy `pip install torch==2.14.1` mặc định, vì lệnh đó có thể tải bản CUDA rất nặng.
+
+Chạy train ở chế độ nền (đóng cửa sổ SSH không làm dừng):
+
+    export MLFLOW_DISABLE_TELEMETRY=true
+    mkdir -p artifacts
+    nohup env PYTHONPATH=src PYTHONUNBUFFERED=1 python -m ecg.models.train --epochs 2 --batch-size 16 --run-name baseline-2ep > artifacts/train-2ep.log 2>&1 &
+
+Theo dõi bằng `tail -3 artifacts/train-2ep.log`. Mỗi epoch in một dòng `Epoch k/2 | train_loss=... | val_loss=... | val_macro_f1=...`; khi xong in `MLflow run: <run_id>`. Trên `ecg-vm` (4 CPU, không GPU), 2 epoch với batch 16 mất khoảng 14 phút.
+
+Ba tham số ghi log: `--tracking-uri` (mặc định lấy biến môi trường `MLFLOW_TRACKING_URI`, nếu không có thì `http://127.0.0.1:5000`), `--experiment` (mặc định `ecg-superdiagnostic`), `--run-name`. Server chưa chạy thì script dừng ngay với thông báo `Không kết nối được MLflow`.
+
+### 9.2 Kiểm tra run trên giao diện
+
+Mở SSH tunnel (mục 9), vào http://127.0.0.1:5000, chọn experiment `ecg-superdiagnostic` rồi chọn run vừa tạo. Run đạt khi:
+
+- Status là Finished.
+- Params có `epochs`, `batch_size`, `learning_rate`, `seed`, `data_dir`, `n_train`, `n_val`, `n_test`, `device`, `torch_version`.
+- Metrics `train_loss`, `val_loss`, `val_macro_f1` có từ 2 điểm (mỗi epoch một điểm).
+- Artifacts có `metrics/history.json` và `metrics/test_metrics.json`.
+- Run có một logged model tên `model`.
+
+Lỗi thường gặp: `Không kết nối được MLflow` nghĩa là server chưa chạy (chạy lại lệnh ở mục 9); `python` hoặc `pytest` báo `not found` nghĩa là chưa kích hoạt venv.
+
+## 10. Xử lý sự cố nhanh
 
 | Triệu chứng | Hướng xử lý |
 |---|---|
@@ -279,7 +337,7 @@ của một bệnh nhân" kỳ vọng là 1), và fold 9, 10 đã qua ít nhất
 | `dvc: command not found` | Chưa kích hoạt venv (`source .venv/bin/activate`) hoặc `pip install -r requirements/dev.txt` chưa chạy xong |
 | Đĩa đầy | `df -h /`, `docker system df`; mở rộng ổ đĩa |
 
-## 10. Trích dẫn dữ liệu
+## 11. Trích dẫn dữ liệu
 
 - Wagner, P., Strodthoff, N., Bousseljot, R., Samek, W., & Schaeffter, T. (2022). PTB-XL, a
   large publicly available electrocardiography dataset (version 1.0.3). PhysioNet.
