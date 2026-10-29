@@ -10,6 +10,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+from sklearn.metrics import roc_auc_score
 from torch import nn
 from torch.utils.data import DataLoader
 
@@ -31,7 +32,7 @@ def set_seed(seed: int) -> None:
 def calculate_metrics(
     targets: np.ndarray, probabilities: np.ndarray
 ) -> dict:
-    """Calculate per-class and macro F1 at threshold 0.5."""
+    """Calculate per-class F1 and macro/micro AUC."""
     predictions = probabilities >= 0.5
     per_class_f1 = {}
 
@@ -47,10 +48,67 @@ def calculate_metrics(
         f1 = 2 * tp / denominator if denominator else 0.0
         per_class_f1[name] = f1
 
+    # AUC của từng lớp không xác định nếu targets chỉ có một giá trị.
+    valid_classes = [
+        index
+        for index in range(targets.shape[1])
+        if np.unique(targets[:, index]).size == 2
+    ]
+
+    if valid_classes:
+        per_class_auc = {
+            SUPERCLASSES[index]: float(
+                roc_auc_score(targets[:, index], probabilities[:, index])
+            )
+            for index in valid_classes
+        }
+        macro_auc = float(np.mean(list(per_class_auc.values())))
+    else:
+        per_class_auc = {}
+        macro_auc = float("nan")
+
+    # Micro AUC cần cả nhãn 0 và 1 trong toàn bộ ma trận.
+    if np.unique(targets).size == 2:
+        micro_auc = float(
+            roc_auc_score(targets.ravel(), probabilities.ravel())
+        )
+    else:
+        micro_auc = float("nan")
+
     return {
         "macro_f1": float(np.mean(list(per_class_f1.values()))),
         "per_class_f1": per_class_f1,
+        "macro_auc": macro_auc,
+        "micro_auc": micro_auc,
+        "per_class_auc": per_class_auc,
     }
+
+
+def calculate_pos_weight(
+    targets: np.ndarray,
+) -> torch.Tensor:
+    """Calculate BCE positive weights from training targets only."""
+    targets = np.asarray(targets, dtype=np.float32)
+
+    if targets.ndim != 2 or targets.shape[1] != len(SUPERCLASSES):
+        raise ValueError(
+            f"targets phải có shape (n_samples, {len(SUPERCLASSES)})"
+        )
+    if targets.shape[0] == 0:
+        raise ValueError("Không thể tính pos_weight từ tập train rỗng")
+
+    positive_counts = targets.sum(axis=0)
+    negative_counts = targets.shape[0] - positive_counts
+
+    # Nếu một lớp không có mẫu dương, đặt trọng số 1 để tránh chia cho 0.
+    weights = np.divide(
+        negative_counts,
+        positive_counts,
+        out=np.ones_like(negative_counts, dtype=np.float32),
+        where=positive_counts > 0,
+    )
+
+    return torch.tensor(weights, dtype=torch.float32)
 
 
 def run_epoch(
@@ -158,9 +216,26 @@ def train(args: argparse.Namespace, tracker: RunTracker) -> None:
     print(f"Batch size: {args.batch_size}; epochs: {args.epochs}")
     print(f"Superclass order: {SUPERCLASSES}")
 
+    train_targets = np.stack(
+        [
+            np.array(
+                [
+                    1.0 if label in labels else 0.0
+                    for label in SUPERCLASSES
+                ],
+                dtype=np.float32,
+            )
+            for labels in train_ds.metadata["diagnostic_superclass"]
+        ]
+    )
+    pos_weight = calculate_pos_weight(train_targets).to(device)
+
     tracker.set_tags({"model": "cnn1d", "task": "superdiagnostic"})
     tracker.log_params(
         {
+            "pos_weight": json.dumps(
+               pos_weight.cpu().tolist()
+            ),
             "epochs": args.epochs,
             "batch_size": args.batch_size,
             "learning_rate": args.learning_rate,
@@ -179,7 +254,8 @@ def train(args: argparse.Namespace, tracker: RunTracker) -> None:
         tracker.log_artifact(str(dvc_file), "data")
 
     model = ECG1DCNN().to(device)
-    criterion = nn.BCEWithLogitsLoss()
+
+    criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
     optimizer = torch.optim.Adam(
         model.parameters(), lr=args.learning_rate
     )
@@ -203,6 +279,8 @@ def train(args: argparse.Namespace, tracker: RunTracker) -> None:
             "val_loss": val_loss,
             "val_macro_f1": val_metrics["macro_f1"],
             "val_per_class_f1": val_metrics["per_class_f1"],
+            "val_auc_macro": val_metrics["macro_auc"],
+            "val_auc_micro": val_metrics["micro_auc"],
         }
         history.append(record)
 
@@ -222,6 +300,8 @@ def train(args: argparse.Namespace, tracker: RunTracker) -> None:
                     f"val_f1_{name}": score
                     for name, score in val_metrics["per_class_f1"].items()
                 },
+               "val_auc_macro": val_metrics["macro_auc"],
+               "val_auc_micro": val_metrics["micro_auc"],
             },
         )
 
@@ -235,6 +315,8 @@ def train(args: argparse.Namespace, tracker: RunTracker) -> None:
                     "superclasses": list(SUPERCLASSES),
                     "sampling_rate": 100,
                     "seed": args.seed,
+                    "val_auc_macro": val_metrics["macro_auc"],
+                    "val_auc_micro": val_metrics["micro_auc"],
                 },
                 checkpoint_path,
             )
@@ -261,6 +343,9 @@ def train(args: argparse.Namespace, tracker: RunTracker) -> None:
         "checkpoint_epoch": checkpoint["epoch"],
         "superclasses": list(SUPERCLASSES),
         "test_fold": 10,
+        "test_auc_macro": test_metrics["macro_auc"],
+        "test_auc_micro": test_metrics["micro_auc"],
+        "test_per_class_auc": test_metrics["per_class_auc"],
     }
     with (output_dir / "test_metrics.json").open(
         "w", encoding="utf-8"
@@ -272,6 +357,10 @@ def train(args: argparse.Namespace, tracker: RunTracker) -> None:
             "best_epoch": checkpoint["epoch"],
             "best_val_loss": best_val_loss,
             "test_loss": test_loss,
+            "test_auc_macro": test_metrics["macro_auc"],
+            "test_auc_micro": test_metrics["micro_auc"],
+            "best_val_auc_macro": checkpoint.get("val_auc_macro", float("nan")),
+            "best_val_auc_micro": checkpoint.get("val_auc_micro", float("nan")),
             "test_macro_f1": test_metrics["macro_f1"],
             **{
                 f"test_f1_{name}": score
