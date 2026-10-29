@@ -40,11 +40,6 @@ class ECGDataset(Dataset):
         statements = load_scp_statements(self.data_dir)
         metadata = add_superclass_column(metadata, statements)
 
-        # Exclude records without any target superclass.
-        metadata = metadata[
-            metadata["diagnostic_superclass"].map(len) > 0
-        ]
-
         # Select only the requested folds.
         self.metadata = metadata[
             metadata["strat_fold"].isin(folds)
