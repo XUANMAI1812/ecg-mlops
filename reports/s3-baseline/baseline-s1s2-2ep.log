@@ -1,0 +1,28 @@
+nohup: ignoring input
+2026/10/29 21:36:55 INFO mlflow.tracking.fluent: Experiment with name 'ecg-superdiagnostic' does not exist. Creating a new experiment.
+Device: cpu
+Train records: 17418
+Validation records: 2183
+Test records: 2198
+Batch size: 16; epochs: 2
+Superclass order: ('NORM', 'MI', 'STTC', 'CD', 'HYP')
+Epoch 1/2 | train_loss=0.7016 | val_loss=0.6774 | val_macro_f1=0.6119
+Epoch 2/2 | train_loss=0.6343 | val_loss=0.6144 | val_macro_f1=0.6733
+2026/10/29 21:42:35 WARNING mlflow.utils.requirements_utils: Found torch version (2.14.1+cpu) contains a local version label (+cpu). MLflow logged a pip requirement for this package as 'torch==2.14.1' without the local version label to make it installable from PyPI. To specify pip requirements containing local version labels, please use `conda_env` or `pip_requirements`.
+2026/10/29 21:42:40 WARNING mlflow.utils.requirements_utils: Found torch version (2.14.1+cpu) contains a local version label (+cpu). MLflow logged a pip requirement for this package as 'torch==2.14.1' without the local version label to make it installable from PyPI. To specify pip requirements containing local version labels, please use `conda_env` or `pip_requirements`.
+
+Test results (fold 10):
+test_loss=0.6230
+test_macro_f1=0.6699
+  NORM: F1=0.8414
+  MI: F1=0.6838
+  STTC: F1=0.7195
+  CD: F1=0.7049
+  HYP: F1=0.4000
+
+Checkpoint: artifacts/baseline-s1s2-2ep/best_model.pt
+History: artifacts/baseline-s1s2-2ep/history.json
+Test metrics: artifacts/baseline-s1s2-2ep/test_metrics.json
+MLflow run: 71a17fe6dd1d49b58ca4ff1fee32de57
+🏃 View run baseline-s1s2-2ep at: http://127.0.0.1:5000/#/experiments/1/runs/71a17fe6dd1d49b58ca4ff1fee32de57
+🧪 View experiment at: http://127.0.0.1:5000/#/experiments/1

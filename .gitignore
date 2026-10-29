@@ -17,3 +17,4 @@ mlflow_data/
 
 # Local model training artifacts
 artifacts/
+mlflow.db
