@@ -26,7 +26,22 @@ import numpy as np
 DEFAULT_TRACKING_URI = "http://127.0.0.1:5000"
 DEFAULT_EXPERIMENT = "ecg-superdiagnostic"
 REQUIRED_PARAMS = ("seed", "learning_rate", "batch_size", "epochs")
-REQUIRED_METRICS = ("train_loss", "val_loss", "val_macro_f1")
+REQUIRED_METRICS = (
+    "train_loss",
+    "val_loss",
+    "val_macro_f1",
+    "val_auc_macro",
+    "val_auc_micro",
+    "test_auc_macro",
+    "test_auc_micro",
+)
+EPOCH_METRICS = (
+    "train_loss",
+    "val_loss",
+    "val_macro_f1",
+    "val_auc_macro",
+    "val_auc_micro",
+)
 MODEL_INPUT_SHAPE = (12, 1000)
 NUM_CLASSES = 5
 BATCH_SIZES = (1, 2, 5)
@@ -90,7 +105,7 @@ def run_checks(client: mlflow.MlflowClient, run, min_epochs: int) -> dict[str, b
     run_id = run.info.run_id
     params = set(run.data.params)
     metrics = set(run.data.metrics)
-    history = {m: client.get_metric_history(run_id, m) for m in REQUIRED_METRICS}
+    history = {m: client.get_metric_history(run_id, m) for m in EPOCH_METRICS}
     artifacts = [a.path for a in client.list_artifacts(run_id)]
     models = run.outputs.model_outputs if run.outputs else []
 
@@ -99,7 +114,7 @@ def run_checks(client: mlflow.MlflowClient, run, min_epochs: int) -> dict[str, b
         f"params có {list(REQUIRED_PARAMS)}": set(REQUIRED_PARAMS) <= params,
         f"metrics có {list(REQUIRED_METRICS)}": set(REQUIRED_METRICS) <= metrics,
         f"metrics có lịch sử theo epoch (>= {min_epochs} điểm)": all(
-            len(points) >= min_epochs for points in history.values()
+            len(history[m]) >= min_epochs for m in EPOCH_METRICS
         ),
         "có ít nhất 1 artifact": len(artifacts) > 0,
         "có đúng 1 logged model": len(models) == 1,
