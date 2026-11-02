@@ -3,9 +3,10 @@
 from torch import nn
 
 from ecg.models.cnn1d import ECG1DCNN
+from ecg.models.resnet1d import ECGResNet1D
 
 
-SUPPORTED_MODELS = ("cnn1d",)
+SUPPORTED_MODELS = ("cnn1d", "resnet1d")
 
 
 def build_model(
@@ -17,6 +18,9 @@ def build_model(
 
     if name == "cnn1d":
         return ECG1DCNN(num_classes=num_classes)
+
+    if name == "resnet1d":
+        return ECGResNet1D(num_classes=num_classes)
 
     supported = ", ".join(SUPPORTED_MODELS)
     raise ValueError(
