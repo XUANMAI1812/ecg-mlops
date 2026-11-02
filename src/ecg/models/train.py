@@ -16,7 +16,7 @@ from torch.utils.data import DataLoader
 
 from ecg.data.dataset import ECGDataset
 from ecg.data.labels import SUPERCLASSES
-from ecg.models.cnn1d import ECG1DCNN
+from ecg.models.model_factory import SUPPORTED_MODELS, build_model
 from ecg.train.tracking import RunTracker
 
 DEFAULT_TRACKING_URI = "http://127.0.0.1:5000"
@@ -158,6 +158,12 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-dir", default="data/raw/ptb-xl")
     parser.add_argument("--output-dir", default="artifacts/ecg-cnn")
+    parser.add_argument(
+        "--model",
+         choices=SUPPORTED_MODELS,
+         default="cnn1d",
+         help="Model architecture to train.",
+    )
     parser.add_argument("--epochs", type=int, default=5)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--learning-rate", type=float, default=1e-3)
@@ -230,11 +236,12 @@ def train(args: argparse.Namespace, tracker: RunTracker) -> None:
     )
     pos_weight = calculate_pos_weight(train_targets).to(device)
 
-    tracker.set_tags({"model": "cnn1d", "task": "superdiagnostic"})
+    tracker.set_tags({"model": args.model, "task": "superdiagnostic"})
     tracker.log_params(
         {
+            "model": args.model,
             "pos_weight": json.dumps(
-               pos_weight.cpu().tolist()
+                pos_weight.cpu().tolist()
             ),
             "epochs": args.epochs,
             "batch_size": args.batch_size,
@@ -253,7 +260,7 @@ def train(args: argparse.Namespace, tracker: RunTracker) -> None:
     if dvc_file.exists():
         tracker.log_artifact(str(dvc_file), "data")
 
-    model = ECG1DCNN().to(device)
+    model = build_model(args.model).to(device)
 
     criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
     optimizer = torch.optim.Adam(
@@ -309,6 +316,7 @@ def train(args: argparse.Namespace, tracker: RunTracker) -> None:
             best_val_loss = val_loss
             torch.save(
                 {
+                    "model": args.model,
                     "model_state_dict": model.state_dict(),
                     "epoch": epoch,
                     "val_loss": val_loss,
