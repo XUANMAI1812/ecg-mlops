@@ -5,7 +5,6 @@ from torch import nn
 from ecg.models.cnn1d import ECG1DCNN
 from ecg.models.resnet1d import ECGResNet1D
 
-
 SUPPORTED_MODELS = ("cnn1d", "resnet1d")
 
 
@@ -23,7 +22,4 @@ def build_model(
         return ECGResNet1D(num_classes=num_classes)
 
     supported = ", ".join(SUPPORTED_MODELS)
-    raise ValueError(
-        f"Unsupported model '{model_name}'. "
-        f"Supported models: {supported}"
-    )
+    raise ValueError(f"Unsupported model '{model_name}'. Supported models: {supported}")

@@ -114,9 +114,7 @@ class ECGResNet1D(nn.Module):
         ]
 
         for _ in range(1, num_blocks):
-            layers.append(
-                ResidualBlock1D(out_channels, out_channels)
-            )
+            layers.append(ResidualBlock1D(out_channels, out_channels))
 
         return nn.Sequential(*layers)
 
@@ -129,9 +127,7 @@ class ECGResNet1D(nn.Module):
             )
 
         if x.shape[1] != NUM_LEADS:
-            raise ValueError(
-                f"Expected {NUM_LEADS} ECG leads, got {x.shape[1]}"
-            )
+            raise ValueError(f"Expected {NUM_LEADS} ECG leads, got {x.shape[1]}")
 
         x = self.stem(x)
         x = self.stage1(x)
