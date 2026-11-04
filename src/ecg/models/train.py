@@ -29,9 +29,7 @@ def set_seed(seed: int) -> None:
     torch.manual_seed(seed)
 
 
-def calculate_metrics(
-    targets: np.ndarray, probabilities: np.ndarray
-) -> dict:
+def calculate_metrics(targets: np.ndarray, probabilities: np.ndarray) -> dict:
     """Calculate per-class F1 and macro/micro AUC."""
     predictions = probabilities >= 0.5
     per_class_f1 = {}
@@ -69,9 +67,7 @@ def calculate_metrics(
 
     # Micro AUC cần cả nhãn 0 và 1 trong toàn bộ ma trận.
     if np.unique(targets).size == 2:
-        micro_auc = float(
-            roc_auc_score(targets.ravel(), probabilities.ravel())
-        )
+        micro_auc = float(roc_auc_score(targets.ravel(), probabilities.ravel()))
     else:
         micro_auc = float("nan")
 
@@ -91,9 +87,7 @@ def calculate_pos_weight(
     targets = np.asarray(targets, dtype=np.float32)
 
     if targets.ndim != 2 or targets.shape[1] != len(SUPERCLASSES):
-        raise ValueError(
-            f"targets phải có shape (n_samples, {len(SUPERCLASSES)})"
-        )
+        raise ValueError(f"targets phải có shape (n_samples, {len(SUPERCLASSES)})")
     if targets.shape[0] == 0:
         raise ValueError("Không thể tính pos_weight từ tập train rỗng")
 
@@ -157,12 +151,16 @@ def run_epoch(
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-dir", default="data/raw/ptb-xl")
-    parser.add_argument("--output-dir", default="artifacts/ecg-cnn")
+    parser.add_argument(
+        "--output-dir",
+        default=None,
+        help="Thư mục lưu checkpoint và kết quả (mặc định: artifacts/<model>).",
+    )
     parser.add_argument(
         "--model",
-         choices=SUPPORTED_MODELS,
-         default="cnn1d",
-         help="Model architecture to train.",
+        choices=SUPPORTED_MODELS,
+        default="cnn1d",
+        help="Model architecture to train.",
     )
     parser.add_argument("--epochs", type=int, default=5)
     parser.add_argument("--batch-size", type=int, default=32)
@@ -178,6 +176,8 @@ def main() -> None:
 
     if args.epochs < 1 or args.batch_size < 1:
         parser.error("--epochs và --batch-size phải >= 1")
+    if args.output_dir is None:
+        args.output_dir = f"artifacts/{args.model}"
 
     with RunTracker(args.tracking_uri, args.experiment, args.run_name) as tracker:
         train(args, tracker)
@@ -225,10 +225,7 @@ def train(args: argparse.Namespace, tracker: RunTracker) -> None:
     train_targets = np.stack(
         [
             np.array(
-                [
-                    1.0 if label in labels else 0.0
-                    for label in SUPERCLASSES
-                ],
+                [1.0 if label in labels else 0.0 for label in SUPERCLASSES],
                 dtype=np.float32,
             )
             for labels in train_ds.metadata["diagnostic_superclass"]
@@ -240,9 +237,7 @@ def train(args: argparse.Namespace, tracker: RunTracker) -> None:
     tracker.log_params(
         {
             "model": args.model,
-            "pos_weight": json.dumps(
-                pos_weight.cpu().tolist()
-            ),
+            "pos_weight": json.dumps(pos_weight.cpu().tolist()),
             "epochs": args.epochs,
             "batch_size": args.batch_size,
             "learning_rate": args.learning_rate,
@@ -263,18 +258,14 @@ def train(args: argparse.Namespace, tracker: RunTracker) -> None:
     model = build_model(args.model).to(device)
 
     criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
-    optimizer = torch.optim.Adam(
-        model.parameters(), lr=args.learning_rate
-    )
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
 
     best_val_loss = float("inf")
     checkpoint_path = output_dir / "best_model.pt"
     history = []
 
     for epoch in range(1, args.epochs + 1):
-        train_loss, _, _ = run_epoch(
-            model, train_loader, criterion, optimizer, device
-        )
+        train_loss, _, _ = run_epoch(model, train_loader, criterion, optimizer, device)
         val_loss, val_targets, val_probs = run_epoch(
             model, val_loader, criterion, None, device
         )
@@ -307,8 +298,8 @@ def train(args: argparse.Namespace, tracker: RunTracker) -> None:
                     f"val_f1_{name}": score
                     for name, score in val_metrics["per_class_f1"].items()
                 },
-               "val_auc_macro": val_metrics["macro_auc"],
-               "val_auc_micro": val_metrics["micro_auc"],
+                "val_auc_macro": val_metrics["macro_auc"],
+                "val_auc_micro": val_metrics["micro_auc"],
             },
         )
 
@@ -334,9 +325,7 @@ def train(args: argparse.Namespace, tracker: RunTracker) -> None:
     tracker.log_artifact(str(output_dir / "history.json"), "metrics")
 
     # Evaluate the selected checkpoint on the test fold only after training.
-    checkpoint = torch.load(
-        checkpoint_path, map_location=device, weights_only=True
-    )
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
     model.load_state_dict(checkpoint["model_state_dict"])
 
     test_loss, test_targets, test_probs = run_epoch(
@@ -355,9 +344,7 @@ def train(args: argparse.Namespace, tracker: RunTracker) -> None:
         "test_auc_micro": test_metrics["micro_auc"],
         "test_per_class_auc": test_metrics["per_class_auc"],
     }
-    with (output_dir / "test_metrics.json").open(
-        "w", encoding="utf-8"
-    ) as file:
+    with (output_dir / "test_metrics.json").open("w", encoding="utf-8") as file:
         json.dump(results, file, ensure_ascii=False, indent=2)
     tracker.log_artifact(str(output_dir / "test_metrics.json"), "metrics")
     tracker.log_summary(

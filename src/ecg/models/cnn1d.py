@@ -18,16 +18,13 @@ class ECG1DCNN(nn.Module):
             nn.BatchNorm1d(32),
             nn.ReLU(inplace=True),
             nn.MaxPool1d(kernel_size=2),
-
             nn.Conv1d(32, 64, kernel_size=5, padding=2),
             nn.BatchNorm1d(64),
             nn.ReLU(inplace=True),
             nn.MaxPool1d(kernel_size=2),
-
             nn.Conv1d(64, 128, kernel_size=5, padding=2),
             nn.BatchNorm1d(128),
             nn.ReLU(inplace=True),
-
             nn.AdaptiveAvgPool1d(1),
         )
 
@@ -46,8 +43,6 @@ class ECG1DCNN(nn.Module):
             )
 
         if x.shape[1] != NUM_LEADS:
-            raise ValueError(
-                f"Expected {NUM_LEADS} ECG leads, got {x.shape[1]}"
-            )
+            raise ValueError(f"Expected {NUM_LEADS} ECG leads, got {x.shape[1]}")
 
         return self.classifier(self.features(x))

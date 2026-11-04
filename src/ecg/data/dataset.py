@@ -32,25 +32,19 @@ class ECGDataset(Dataset):
 
         self.data_dir = Path(data_dir)
         self.sampling_rate = sampling_rate
-        self.filename_column = (
-            "filename_lr" if sampling_rate == 100 else "filename_hr"
-        )
+        self.filename_column = "filename_lr" if sampling_rate == 100 else "filename_hr"
 
         metadata = load_metadata(self.data_dir)
         statements = load_scp_statements(self.data_dir)
         metadata = add_superclass_column(metadata, statements)
 
         # Select only the requested folds.
-        self.metadata = metadata[
-            metadata["strat_fold"].isin(folds)
-        ].copy()
+        self.metadata = metadata[metadata["strat_fold"].isin(folds)].copy()
 
         if self.metadata.empty:
             raise ValueError(f"Không có bản ghi cho folds={folds}")
 
-        self.label_to_index = {
-            name: index for index, name in enumerate(SUPERCLASSES)
-        }
+        self.label_to_index = {name: index for index, name in enumerate(SUPERCLASSES)}
 
     def __len__(self) -> int:
         return len(self.metadata)
@@ -58,9 +52,7 @@ class ECGDataset(Dataset):
     def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor]:
         row = self.metadata.iloc[index]
 
-        signal, fields = load_record(
-            self.data_dir, row[self.filename_column]
-        )
+        signal, fields = load_record(self.data_dir, row[self.filename_column])
         validate_signal(signal, fields, self.sampling_rate)
 
         signal = preprocess_ecg(

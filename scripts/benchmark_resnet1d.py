@@ -90,10 +90,7 @@ def main():
     print(f"Total time: {total_time:.2f}s")
 
     if batch_times:
-        print(
-            "Average training step: "
-            f"{sum(batch_times) / len(batch_times):.2f}s"
-        )
+        print(f"Average training step: {sum(batch_times) / len(batch_times):.2f}s")
 
     print(f"Final RAM: {final_ram:.1f} MB")
     print(f"Max RSS: {max_rss:.1f} MB")

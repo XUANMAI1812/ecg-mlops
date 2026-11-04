@@ -11,16 +11,16 @@ from ecg.data.dataset import ECGDataset
 def fake_dataset_files(tmp_path, monkeypatch):
     """Create synthetic metadata with one labeled and one unlabeled record."""
     metadata = pd.DataFrame(
-    {
-        "ecg_id": [1, 2],
-        "scp_codes": [
-            {"NORM": 100.0},
-            {"SR": 0.0},
-        ],
-        "strat_fold": [1, 1],
-        "filename_lr": ["fake/record1", "fake/record2"],
-        "filename_hr": ["fake/record1_hr", "fake/record2_hr"],
-    }
+        {
+            "ecg_id": [1, 2],
+            "scp_codes": [
+                {"NORM": 100.0},
+                {"SR": 0.0},
+            ],
+            "strat_fold": [1, 1],
+            "filename_lr": ["fake/record1", "fake/record2"],
+            "filename_hr": ["fake/record1_hr", "fake/record2_hr"],
+        }
     ).set_index("ecg_id")
 
     statements = pd.DataFrame(
@@ -45,8 +45,18 @@ def fake_dataset_files(tmp_path, monkeypatch):
         fields = {
             "fs": 100,
             "sig_name": [
-                "I", "II", "III", "AVR", "AVL", "AVF",
-                "V1", "V2", "V3", "V4", "V5", "V6",
+                "I",
+                "II",
+                "III",
+                "AVR",
+                "AVL",
+                "AVF",
+                "V1",
+                "V2",
+                "V3",
+                "V4",
+                "V5",
+                "V6",
             ],
         }
         return signal, fields

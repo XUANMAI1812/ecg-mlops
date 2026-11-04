@@ -2,8 +2,8 @@ import pytest
 import torch
 
 from ecg.models.cnn1d import ECG1DCNN
-from ecg.models.resnet1d import ECGResNet1D
 from ecg.models.model_factory import SUPPORTED_MODELS, build_model
+from ecg.models.resnet1d import ECGResNet1D
 
 
 @pytest.mark.parametrize(
