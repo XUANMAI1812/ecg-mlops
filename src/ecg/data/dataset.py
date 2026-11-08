@@ -26,9 +26,13 @@ class ECGDataset(Dataset):
         data_dir: str | Path,
         folds: tuple[int, ...],
         sampling_rate: int = 100,
+        sample_n: int | None = None,
+        seed: int = 42,
     ) -> None:
         if sampling_rate not in (100, 500):
             raise ValueError("sampling_rate phải là 100 hoặc 500")
+        if sample_n is not None and sample_n < 1:
+            raise ValueError("sample_n phải >= 1")
 
         self.data_dir = Path(data_dir)
         self.sampling_rate = sampling_rate
@@ -43,6 +47,13 @@ class ECGDataset(Dataset):
 
         if self.metadata.empty:
             raise ValueError(f"Không có bản ghi cho folds={folds}")
+
+        # Tập mẫu nhỏ: chọn ngẫu nhiên theo seed trong chính các fold đã chọn,
+        # giữ thứ tự ecg_id để lần chạy sau lấy đúng các bản ghi đó.
+        if sample_n is not None and sample_n < len(self.metadata):
+            self.metadata = self.metadata.sample(
+                n=sample_n, random_state=seed
+            ).sort_index()
 
         self.label_to_index = {name: index for index, name in enumerate(SUPERCLASSES)}
 
