@@ -285,7 +285,7 @@ Xem giao diện từ máy khác: mở SSH tunnel từ máy cá nhân, rồi vào
 
     ssh -L 5000:127.0.0.1:5000 <user>@<địa chỉ máy huấn luyện>
 
-Dừng server: `pkill -f "[m]lflow server"`. Server không tự chạy lại sau khi khởi động lại máy; chạy lại lệnh ở trên.
+Dừng server: `pkill -f "[m]lflow server"`. Trên máy có systemd, nên chạy server bằng dịch vụ `ecg-mlflow` (mục 12.3) để server tự chạy lại sau khi khởi động lại máy; khi đó dừng bằng `sudo systemctl stop ecg-mlflow`.
 
 Dữ liệu của server nằm trong `mlflow_data/` (đã gitignore). Xoá thư mục này là xoá toàn bộ lịch sử run.
 
@@ -355,3 +355,131 @@ Kết quả đúng: mọi dòng bắt đầu bằng `OK` và `echo $?` in `0`. C
 - Wagner, P., Strodthoff, N., Bousseljot, R.-D., Kreiseler, D., Lunze, F.I., Samek, W.,
   Schaeffter, T. (2020). PTB-XL: A Large Publicly Available ECG Dataset. Scientific Data.
   <https://doi.org/10.1038/s41597-020-0495-6>
+
+## 12. Prefect (điều phối pipeline, cục bộ)
+
+Prefect server và worker chạy trên máy huấn luyện, chỉ nhận kết nối từ chính máy đó (127.0.0.1:4200). Không mở cổng này ra ngoài. Dữ liệu của Prefect (cơ sở dữ liệu SQLite `prefect.db`, file cấu hình `profiles.toml`) nằm ở `~/.prefect/`, ngoài repo.
+
+Các lệnh dưới chạy từ thư mục gốc của repo, venv đã kích hoạt (`source .venv/bin/activate`). `prefect` đã có sau khi cài `requirements/dev.txt` (mục 5).
+
+### 12.1 Cấu hình lần đầu
+
+    prefect config set PREFECT_API_URL=http://127.0.0.1:4200/api PREFECT_SERVER_ANALYTICS_ENABLED=false
+    prefect config view
+
+Kết quả đúng: `prefect config view` có hai dòng `PREFECT_API_URL='http://127.0.0.1:4200/api' (from profile)` và `PREFECT_SERVER_ANALYTICS_ENABLED='false' (from profile)`. Biến thứ hai tắt việc server gửi thống kê sử dụng ẩn danh khi khởi động.
+
+Phía client (lệnh `prefect`, flow chạy qua worker) chỉ gửi thống kê khi server bật analytics. Muốn tắt hẳn phía client, không phụ thuộc server:
+
+    echo 'export DO_NOT_TRACK=1' >> ~/.bashrc
+
+### 12.2 Chạy server và worker bằng tay
+
+Dùng khi máy không có systemd (ví dụ WSL) hoặc khi cần thử nhanh:
+
+    mkdir -p artifacts
+    nohup prefect server start --host 127.0.0.1 --port 4200 > artifacts/prefect-server.log 2>&1 &
+
+Kiểm tra, sau khoảng 15 giây: `curl -s http://127.0.0.1:4200/api/health` in `true`.
+
+Tạo work pool (một lần cho mỗi server):
+
+    prefect work-pool create ecg-local --type process
+
+Chạy worker ở một terminal khác (cũng đã kích hoạt venv):
+
+    export MLFLOW_DISABLE_TELEMETRY=true
+    nohup prefect worker start --pool ecg-local --type process > artifacts/prefect-worker.log 2>&1 &
+
+Worker chạy mỗi flow run thành một tiến trình con và truyền biến môi trường của nó xuống tiến trình đó, nên `MLFLOW_DISABLE_TELEMETRY` phải được đặt trước khi chạy worker. `--type process` giúp worker vẫn khởi động được khi server chưa sẵn sàng.
+
+Dừng: `pkill -f "[p]refect worker"` rồi `pkill -f "[p]refect server"`.
+
+### 12.3 Chạy MLflow, Prefect server và worker bằng systemd
+
+Trên máy huấn luyện có systemd (`ecg-vm`), ba dịch vụ `ecg-mlflow`, `ecg-prefect-server`, `ecg-prefect-worker` tự chạy khi máy khởi động và tự chạy lại khi bị lỗi. Dịch vụ chạy bằng user hiện tại, dùng venv và thư mục dữ liệu của repo này. Trước khi bật, dừng các tiến trình đã chạy bằng tay (mục 9, 12.2) để tránh trùng cổng.
+
+Tạo file unit (chạy từ gốc repo; `$USER`, `$HOME` và đường dẫn repo được điền tự động khi chạy lệnh):
+
+    REPO="$(pwd)"
+    sudo tee /etc/systemd/system/ecg-mlflow.service > /dev/null <<EOF
+    [Unit]
+    Description=MLflow tracking server (ecg-mlops, dev)
+    After=network.target
+
+    [Service]
+    Type=simple
+    User=$USER
+    WorkingDirectory=$REPO
+    Environment=MLFLOW_DISABLE_TELEMETRY=true
+    ExecStartPre=/usr/bin/mkdir -p $REPO/mlflow_data
+    ExecStart=$REPO/.venv/bin/mlflow server --backend-store-uri sqlite:///mlflow_data/mlflow.db --artifacts-destination ./mlflow_data/artifacts --host 127.0.0.1 --port 5000 --workers 1
+    Restart=on-failure
+    RestartSec=5
+
+    [Install]
+    WantedBy=multi-user.target
+    EOF
+    sudo tee /etc/systemd/system/ecg-prefect-server.service > /dev/null <<EOF
+    [Unit]
+    Description=Prefect server (ecg-mlops, dev)
+    After=network.target
+
+    [Service]
+    Type=simple
+    User=$USER
+    WorkingDirectory=$REPO
+    Environment=PREFECT_HOME=$HOME/.prefect
+    Environment=PREFECT_SERVER_ANALYTICS_ENABLED=false
+    ExecStart=$REPO/.venv/bin/prefect server start --host 127.0.0.1 --port 4200
+    Restart=on-failure
+    RestartSec=5
+
+    [Install]
+    WantedBy=multi-user.target
+    EOF
+    sudo tee /etc/systemd/system/ecg-prefect-worker.service > /dev/null <<EOF
+    [Unit]
+    Description=Prefect process worker, pool ecg-local (ecg-mlops, dev)
+    After=network.target ecg-prefect-server.service ecg-mlflow.service
+    Wants=ecg-prefect-server.service ecg-mlflow.service
+
+    [Service]
+    Type=simple
+    User=$USER
+    WorkingDirectory=$REPO
+    Environment=PREFECT_HOME=$HOME/.prefect
+    Environment=PREFECT_API_URL=http://127.0.0.1:4200/api
+    Environment=MLFLOW_DISABLE_TELEMETRY=true
+    ExecStart=$REPO/.venv/bin/prefect worker start --pool ecg-local --type process
+    Restart=on-failure
+    RestartSec=10
+
+    [Install]
+    WantedBy=multi-user.target
+    EOF
+    systemd-analyze verify /etc/systemd/system/ecg-mlflow.service /etc/systemd/system/ecg-prefect-server.service /etc/systemd/system/ecg-prefect-worker.service
+
+Kết quả đúng: `systemd-analyze verify` không in gì.
+
+Bật và kiểm tra:
+
+    sudo systemctl daemon-reload
+    sudo systemctl enable --now ecg-mlflow ecg-prefect-server ecg-prefect-worker
+    systemctl is-active ecg-mlflow ecg-prefect-server ecg-prefect-worker
+
+Kết quả đúng: ba dòng `active`. Sau khoảng 15 giây, `curl -s http://127.0.0.1:5000/health` in `OK` và `curl -s http://127.0.0.1:4200/api/health` in `true`.
+
+Xem log: `journalctl -u ecg-prefect-worker -n 50` (thay tên dịch vụ tương ứng). Dừng: `sudo systemctl stop ecg-prefect-worker ecg-prefect-server ecg-mlflow`. Tắt tự khởi động: `sudo systemctl disable <tên dịch vụ>`.
+
+Nếu sửa file unit, chạy lại `sudo systemctl daemon-reload` rồi `sudo systemctl restart <tên dịch vụ>`. Nếu đổi vị trí repo hoặc venv, tạo lại cả ba file unit.
+
+### 12.4 Xem giao diện và thống kê flow run
+
+Mở SSH tunnel từ máy cá nhân, rồi vào http://127.0.0.1:4200
+
+    ssh -L 4200:127.0.0.1:4200 <user>@<địa chỉ máy huấn luyện>
+
+Liệt kê các flow run gần nhất kèm trạng thái (dùng cho tiêu chí "tỷ lệ flow run thành công, thời gian chạy"):
+
+    prefect flow-run ls --limit 20
