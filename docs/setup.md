@@ -483,3 +483,61 @@ Mở SSH tunnel từ máy cá nhân, rồi vào http://127.0.0.1:4200
 Liệt kê các flow run gần nhất kèm trạng thái (dùng cho tiêu chí "tỷ lệ flow run thành công, thời gian chạy"):
 
     prefect flow-run ls --limit 20
+
+## 13. Flow huấn luyện `ecg-train-pipeline` (Prefect)
+
+`flows/train_pipeline.py` chạy bốn task theo thứ tự. Task nào lỗi thì flow dừng ở trạng thái `Failed`:
+
+1. `check_data`: kiểm tra `ptbxl_database.csv` (21799 bản ghi) và thư mục `records100/` đã có (mục 7). Tiền xử lý tín hiệu (lọc, resample, chuẩn hoá từng bản ghi) chạy trong `ECGDataset` khi đọc dữ liệu, nên flow chưa có bước tiền xử lý riêng.
+2. `train`: chạy `python -m ecg.models.train`, lưu checkpoint vào `artifacts/<tên run>/` và log run lên MLflow.
+3. `evaluate`: chạy `python -m ecg.train.evaluate` trên fold 9 (validation), ghi `evaluation/val.json` (AUC, F1, confusion matrix từng lớp ở ngưỡng 0,5) vào chính run đó.
+4. `check_run`: chạy `scripts/check_mlflow_run.py` để kiểm tra run.
+
+Flow không đánh giá fold 10. Metric test do `train.py` tự tính như trước.
+
+Tham số và giá trị mặc định: `model=cnn1d`, `epochs=1`, `batch_size=16`, `learning_rate=0.001`, `seed=42`, `sample_n=200`, `data_dir=data/raw/ptb-xl`. `sample_n` là số bản ghi lấy ngẫu nhiên (theo `seed`) trong mỗi tập train, val và test. `sample_n=null` dùng toàn bộ các fold. Tên run có dạng `<model>-<epochs>ep` khi dùng toàn bộ dữ liệu, và `<model>-<epochs>ep-s<sample_n>` khi chạy tập mẫu.
+
+Cần có: MLflow server, Prefect server và worker của pool `ecg-local` đang chạy (mục 12.3).
+
+### 13.1 Tạo deployment
+
+Chạy một lần từ gốc repo. Chạy lại khi đổi vị trí repo, hoặc khi đổi tên hay tham số của hàm `train_pipeline`:
+
+```bash
+cd ~/ecg-mlops && source .venv/bin/activate
+prefect --no-prompt deploy flows/train_pipeline.py:train_pipeline --name sample --pool ecg-local
+```
+
+Lệnh in cảnh báo không có `prefect.yaml`. Cảnh báo này không ảnh hưởng: deployment ghi lại đường dẫn repo, worker chạy code ngay trong thư mục đó. Vì vậy sửa code trong repo thì lần chạy sau dùng code mới, không cần deploy lại.
+
+### 13.2 Chạy flow
+
+```bash
+# Tập mẫu 200 bản ghi, 1 epoch: kiểm tra nhanh pipeline
+prefect deployment run 'ecg-train-pipeline/sample' --watch
+# Đổi model
+prefect deployment run 'ecg-train-pipeline/sample' -p model=resnet1d --watch
+# Toàn bộ dữ liệu, 2 epoch
+prefect deployment run 'ecg-train-pipeline/sample' -p sample_n=null -p epochs=2 --watch
+```
+
+Giá trị sau `-p` được đọc theo JSON, nên `null` nghĩa là không lấy mẫu. `--watch` chờ đến khi flow kết thúc. Lệnh trả mã 0 khi `Completed` và mã 1 khi `Failed`.
+
+### 13.3 Xem kết quả
+
+```bash
+COLUMNS=150 prefect flow-run ls --limit 5
+prefect flow-run logs <flow_run_id> | grep -E "OK  |LỖI|Xong"
+```
+
+Trên MLflow, run có tên như trên. Mục Artifacts của run có `evaluation/val.json`, cạnh `metrics/history.json` và `metrics/test_metrics.json`.
+
+### 13.4 Chạy từng bước bằng tay
+
+```bash
+export MLFLOW_DISABLE_TELEMETRY=true
+PYTHONPATH=src python -m ecg.models.train --model cnn1d --epochs 1 --batch-size 16 --sample-n 200
+PYTHONPATH=src python -m ecg.train.evaluate --run-id <run_id> --batch-size 16 --sample-n 200
+```
+
+`evaluate.py` mặc định đánh giá fold 9. Muốn ra đúng metric val đã log khi train, truyền cùng `--batch-size`, `--sample-n` và `--seed` như lúc train (flow tự làm việc này). Fold 10 chỉ dùng cho đánh giá cuối: `--split test --allow-test`.

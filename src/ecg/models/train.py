@@ -167,6 +167,12 @@ def main() -> None:
     parser.add_argument("--learning-rate", type=float, default=1e-3)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
+        "--sample-n",
+        type=int,
+        default=None,
+        help="Chỉ dùng N bản ghi mỗi tập train/val/test, chọn theo --seed (mặc định: toàn bộ).",
+    )
+    parser.add_argument(
         "--tracking-uri",
         default=os.environ.get("MLFLOW_TRACKING_URI", DEFAULT_TRACKING_URI),
     )
@@ -176,6 +182,8 @@ def main() -> None:
 
     if args.epochs < 1 or args.batch_size < 1:
         parser.error("--epochs và --batch-size phải >= 1")
+    if args.sample_n is not None and args.sample_n < 1:
+        parser.error("--sample-n phải >= 1")
     if args.output_dir is None:
         args.output_dir = f"artifacts/{args.model}"
 
@@ -192,9 +200,10 @@ def train(args: argparse.Namespace, tracker: RunTracker) -> None:
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    train_ds = ECGDataset(data_dir, folds=tuple(range(1, 9)))
-    val_ds = ECGDataset(data_dir, folds=(9,))
-    test_ds = ECGDataset(data_dir, folds=(10,))
+    sample = {"sample_n": args.sample_n, "seed": args.seed}
+    train_ds = ECGDataset(data_dir, folds=tuple(range(1, 9)), **sample)
+    val_ds = ECGDataset(data_dir, folds=(9,), **sample)
+    test_ds = ECGDataset(data_dir, folds=(10,), **sample)
 
     train_loader = DataLoader(
         train_ds,
@@ -242,6 +251,7 @@ def train(args: argparse.Namespace, tracker: RunTracker) -> None:
             "batch_size": args.batch_size,
             "learning_rate": args.learning_rate,
             "seed": args.seed,
+            "sample_n": args.sample_n if args.sample_n is not None else "all",
             "data_dir": str(data_dir),
             "n_train": len(train_ds),
             "n_val": len(val_ds),
