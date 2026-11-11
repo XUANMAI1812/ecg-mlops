@@ -40,17 +40,24 @@ class RunTracker:
     """Bọc một run MLflow. Dùng như context manager; run kết thúc FAILED nếu có lỗi."""
 
     def __init__(
-        self, tracking_uri: str, experiment: str, run_name: str | None = None
+        self,
+        tracking_uri: str,
+        experiment: str,
+        run_name: str | None = None,
+        *,
+        nested: bool = False,
     ) -> None:
+        """nested=True: mở run con dưới run đang mở (ví dụ trial dưới study)."""
         check_tracking_server(tracking_uri)
         mlflow.set_tracking_uri(tracking_uri)
         mlflow.set_experiment(experiment)
         self._run_name = run_name
+        self._nested = nested
         self._run: Any = None
         self.model_uri: str | None = None
 
     def __enter__(self) -> Self:
-        self._run = mlflow.start_run(run_name=self._run_name)
+        self._run = mlflow.start_run(run_name=self._run_name, nested=self._nested)
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:

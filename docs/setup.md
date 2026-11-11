@@ -541,3 +541,43 @@ PYTHONPATH=src python -m ecg.train.evaluate --run-id <run_id> --batch-size 16 --
 ```
 
 `evaluate.py` mặc định đánh giá fold 9. Muốn ra đúng metric val đã log khi train, truyền cùng `--batch-size`, `--sample-n` và `--seed` như lúc train (flow tự làm việc này). Fold 10 chỉ dùng cho đánh giá cuối: `--split test --allow-test`.
+
+## 14. Tinh chỉnh tham số bằng Optuna
+
+`src/ecg/train/tune.py` tìm `learning_rate` và `batch_size` cho một model bằng Optuna, tối ưu `best_val_auc_macro` (maximize). Chỉ dùng fold 1–8 (train) và fold 9 (val); trial không đánh giá fold 10 và không log model. Sampler `TPESampler` (seed theo `--seed`), pruner `MedianPruner` dừng sớm trial kém sau mỗi epoch.
+
+Kết quả:
+- File study SQLite: `optuna_data/<study>.db` (không commit). Tên study mặc định `<model>-aucmacro-v1`, thêm `-s<N>` khi chạy tập mẫu.
+- MLflow, experiment `ecg-tuning`: mỗi lần chạy study là một run cha (tag `role=study`, artifact `study/trials.csv`), mỗi trial là một run con (tag `trial_number`, `trial_state` = `complete` hoặc `pruned`).
+- Checkpoint của từng trial: `artifacts/tuning/<study>/t<số trial>/`.
+
+### 14.1 Chạy study
+
+Cần MLflow server đang chạy (mục 9). Từ gốc repo, venv đã kích hoạt:
+
+```bash
+export MLFLOW_DISABLE_TELEMETRY=true
+# Thử nhanh trên tập mẫu
+PYTHONPATH=src python -m ecg.train.tune run --model cnn1d --n-trials 3 --epochs 2 --sample-n 200 --n-startup-trials 1
+# Study thật: 5 epoch, toàn bộ dữ liệu
+PYTHONPATH=src python -m ecg.train.tune run --model cnn1d --n-trials <N>
+PYTHONPATH=src python -m ecg.train.tune run --model resnet1d --n-trials <N>
+```
+
+Mặc định giữ dữ liệu train và val đã tiền xử lý trong RAM cho cả study; thêm `--no-cache` nếu máy thiếu RAM. Chạy lại cùng lệnh thì study chạy tiếp từ file `.db` (thêm `--n-trials` trial nữa). Cấu hình study (model, epoch, seed, khoảng tìm kiếm, pruner) lưu trong file study; chạy tiếp với cấu hình khác sẽ báo lỗi.
+
+Các tham số khác: `PYTHONPATH=src python -m ecg.train.tune run --help`.
+
+### 14.2 Đưa study chạy ở máy khác lên MLflow chung
+
+Chép file `optuna_data/<study>.db` vào `optuna_data/` trên máy có MLflow chung, rồi:
+
+```bash
+PYTHONPATH=src python -m ecg.train.tune summarize --storage-file optuna_data/<study>.db --source <nơi-chạy>
+```
+
+Lệnh tạo một run `<study>-summary` trong `ecg-tuning` (tag `role=summary`), gồm cấu hình study, tham số tốt nhất (`best_learning_rate`, `best_batch_size`), artifact `study/trials.csv` và chính file `.db`. Lệnh không train.
+
+### 14.3 Sau khi có tham số tốt nhất
+
+Chạy lại cấu hình tốt nhất bằng `ecg.models.train` (mục 9.1) trong experiment `ecg-superdiagnostic`, cùng 5 epoch và seed của study, rồi đánh giá bằng `ecg.train.evaluate` trên fold 9. Fold 10 chỉ dùng cho đánh giá cuối.
