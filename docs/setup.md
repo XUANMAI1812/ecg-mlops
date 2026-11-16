@@ -581,3 +581,51 @@ Lệnh tạo một run `<study>-summary` trong `ecg-tuning` (tag `role=summary`)
 ### 14.3 Sau khi có tham số tốt nhất
 
 Chạy lại cấu hình tốt nhất bằng `ecg.models.train` (mục 9.1) trong experiment `ecg-superdiagnostic`, cùng 5 epoch và seed của study, rồi đánh giá bằng `ecg.train.evaluate` trên fold 9. Fold 10 chỉ dùng cho đánh giá cuối.
+
+## 15. Docker: image huấn luyện và image serving
+
+Hai image build từ gốc repo. `.dockerignore` chỉ cho `requirements/`, `src/`, `scripts/` vào build context, nên dữ liệu, `.venv/`, `mlflow_data/` và `.env` không bao giờ nằm trong image.
+
+| Image | Dockerfile | Dùng để |
+|---|---|---|
+| `ecg-train:dev` | `docker/Dockerfile.train` | Chạy `ecg.models.train`, `ecg.train.tune`, `ecg.train.evaluate` trên CPU |
+| `ecg-serve:dev` | `docker/Dockerfile.serve` | Chạy API FastAPI (cổng 8000 trong container) |
+
+Cả hai dùng `python:3.12.16-slim-bookworm`, cài torch bản CPU từ `https://download.pytorch.org/whl/cpu` rồi cài `requirements/dev.txt`, và chạy bằng user không phải root.
+
+### 15.1 Build
+
+```bash
+docker build -f docker/Dockerfile.train -t ecg-train:dev .
+docker build -f docker/Dockerfile.serve -t ecg-serve:dev .
+docker run --rm --entrypoint python ecg-train:dev -c "import torch; print(torch.__version__, torch.version.cuda)"
+```
+
+Lệnh cuối phải in `2.14.1+cpu None`.
+
+### 15.2 Chạy huấn luyện trong container
+
+Container dùng mạng của máy (`--network host`) để gửi log tới MLflow server ở `127.0.0.1:5000` (mục 9); không mở thêm cổng nào. Dữ liệu mount chỉ đọc; `artifacts/` và `optuna_data/` mount để giữ checkpoint và file study trên máy. Chạy bằng uid/gid của user hiện tại để file tạo ra thuộc về user đó.
+
+```bash
+mkdir -p artifacts optuna_data
+docker run --rm --network host --user "$(id -u):$(id -g)" \
+  -v "$PWD/data:/app/data:ro" \
+  -v "$PWD/artifacts:/app/artifacts" \
+  -v "$PWD/optuna_data:/app/optuna_data" \
+  ecg-train:dev ecg.models.train --model cnn1d --epochs 1 --batch-size 16 \
+  --sample-n 200 --run-name cnn1d-1ep-s200-docker --output-dir artifacts/cnn1d-1ep-s200-docker
+```
+
+Tham số đầu tiên sau tên image là module cần chạy (`ecg.models.train`, `ecg.train.tune`, `ecg.train.evaluate`); phần sau giống hệt khi chạy trên máy. Chạy test trong container: thay module bằng `pytest -q -p no:cacheprovider tests` và mount thêm `-v "$PWD/tests:/app/tests:ro"`.
+
+### 15.3 Chạy API
+
+```bash
+docker run -d --name ecg-api -p 127.0.0.1:8000:8000 ecg-serve:dev
+curl -s http://127.0.0.1:8000/health; echo
+docker inspect --format '{{.State.Health.Status}}' ecg-api
+docker rm -f ecg-api
+```
+
+`/health` trả `{"status":"ok"}`; trạng thái health chuyển sang `healthy` sau khoảng 30 giây. Cổng chỉ mở trên `127.0.0.1` của máy.

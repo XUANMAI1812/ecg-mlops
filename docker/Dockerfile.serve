@@ -1,0 +1,39 @@
+# syntax=docker/dockerfile:1
+# Môi trường phục vụ dự đoán: FastAPI chạy bằng uvicorn, cổng 8000 trong container.
+# Tuần 5 chỉ có GET /health; /predict và nạp model từ MLflow làm ở tuần 7.
+# Build và chạy: docs/setup.md mục 15.
+
+ARG PYTHON_IMAGE=python:3.12.16-slim-bookworm
+
+FROM ${PYTHON_IMAGE} AS builder
+ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+ENV PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+RUN python -m venv /opt/venv
+ENV PATH=/opt/venv/bin:$PATH
+COPY requirements/dev.txt /tmp/requirements/dev.txt
+# Cài torch bản CPU trước, giống Dockerfile.train (xem chú thích ở đó).
+RUN TORCH_VERSION="$(grep -E '^torch==' /tmp/requirements/dev.txt | cut -d= -f3)" \
+    && pip install "torch==${TORCH_VERSION}" --index-url "${TORCH_INDEX_URL}" \
+    && pip install -r /tmp/requirements/dev.txt \
+    && pip check
+
+FROM ${PYTHON_IMAGE}
+ENV PATH=/opt/venv/bin:$PATH \
+    PYTHONPATH=/app/src \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    MLFLOW_DISABLE_TELEMETRY=true \
+    DO_NOT_TRACK=1 \
+    GIT_PYTHON_REFRESH=quiet \
+    HOME=/tmp
+COPY --from=builder /opt/venv /opt/venv
+WORKDIR /app
+COPY src/ src/
+RUN useradd --no-create-home --shell /usr/sbin/nologin --uid 10001 app
+USER app
+EXPOSE 8000
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+    CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+CMD ["uvicorn", "ecg.serving.app:app", "--host", "0.0.0.0", "--port", "8000"]
