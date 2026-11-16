@@ -6,13 +6,14 @@ import argparse
 import json
 import os
 import random
+from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
 import torch
 from sklearn.metrics import roc_auc_score
 from torch import nn
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset
 
 from ecg.data.dataset import ECGDataset
 from ecg.data.labels import SUPERCLASSES
@@ -191,7 +192,26 @@ def main() -> None:
         train(args, tracker)
 
 
-def train(args: argparse.Namespace, tracker: RunTracker) -> None:
+def train(
+    args: argparse.Namespace,
+    tracker: RunTracker,
+    *,
+    evaluate_test: bool = True,
+    log_model: bool = True,
+    epoch_callback: Callable[[int, dict], None] | None = None,
+    datasets: tuple[Dataset, Dataset] | None = None,
+) -> dict[str, float]:
+    """Huấn luyện một model, trả về metrics tổng kết (best_* và test_* nếu có).
+
+    Giá trị mặc định giữ đúng hành vi khi chạy bằng CLI. Khi tinh chỉnh tham số
+    (ecg.train.tune):
+    - evaluate_test=False: không nạp và không đánh giá fold 10 (R7).
+    - log_model=False: không log model lên MLflow.
+    - epoch_callback(epoch, record): gọi sau mỗi epoch, sau khi đã log metrics và
+      lưu checkpoint; ngoại lệ ném ra từ callback dừng huấn luyện và được ném tiếp.
+    - datasets=(train, val): dữ liệu fold 1-8 và fold 9 nạp sẵn, dùng lại qua nhiều
+      lần gọi. Mỗi tập cần thuộc tính metadata như ECGDataset (để tính pos_weight).
+    """
     set_seed(args.seed)
     torch.set_num_threads(2)
     device = torch.device("cpu")
@@ -201,9 +221,13 @@ def train(args: argparse.Namespace, tracker: RunTracker) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     sample = {"sample_n": args.sample_n, "seed": args.seed}
-    train_ds = ECGDataset(data_dir, folds=tuple(range(1, 9)), **sample)
-    val_ds = ECGDataset(data_dir, folds=(9,), **sample)
-    test_ds = ECGDataset(data_dir, folds=(10,), **sample)
+    if datasets is None:
+        train_ds = ECGDataset(data_dir, folds=tuple(range(1, 9)), **sample)
+        val_ds = ECGDataset(data_dir, folds=(9,), **sample)
+    else:
+        train_ds, val_ds = datasets
+    # Fold 10 chỉ nạp khi cần đánh giá test; tinh chỉnh tham số không dùng fold 10.
+    test_ds = ECGDataset(data_dir, folds=(10,), **sample) if evaluate_test else None
 
     train_loader = DataLoader(
         train_ds,
@@ -217,17 +241,21 @@ def train(args: argparse.Namespace, tracker: RunTracker) -> None:
         shuffle=False,
         num_workers=0,
     )
-    test_loader = DataLoader(
-        test_ds,
-        batch_size=args.batch_size,
-        shuffle=False,
-        num_workers=0,
+    test_loader = (
+        DataLoader(
+            test_ds,
+            batch_size=args.batch_size,
+            shuffle=False,
+            num_workers=0,
+        )
+        if test_ds is not None
+        else None
     )
 
     print(f"Device: {device}")
     print(f"Train records: {len(train_ds)}")
     print(f"Validation records: {len(val_ds)}")
-    print(f"Test records: {len(test_ds)}")
+    print(f"Test records: {len(test_ds) if test_ds is not None else 'skipped'}")
     print(f"Batch size: {args.batch_size}; epochs: {args.epochs}")
     print(f"Superclass order: {SUPERCLASSES}")
 
@@ -255,7 +283,7 @@ def train(args: argparse.Namespace, tracker: RunTracker) -> None:
             "data_dir": str(data_dir),
             "n_train": len(train_ds),
             "n_val": len(val_ds),
-            "n_test": len(test_ds),
+            "n_test": len(test_ds) if test_ds is not None else "skipped",
             "device": str(device),
             "torch_version": torch.__version__,
         }
@@ -330,62 +358,76 @@ def train(args: argparse.Namespace, tracker: RunTracker) -> None:
                 checkpoint_path,
             )
 
+        if epoch_callback is not None:
+            epoch_callback(epoch, record)
+
     with (output_dir / "history.json").open("w", encoding="utf-8") as file:
         json.dump(history, file, ensure_ascii=False, indent=2)
     tracker.log_artifact(str(output_dir / "history.json"), "metrics")
 
-    # Evaluate the selected checkpoint on the test fold only after training.
+    # Nạp checkpoint tốt nhất (theo val loss) để tổng kết, đánh giá test và log model.
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
     model.load_state_dict(checkpoint["model_state_dict"])
 
-    test_loss, test_targets, test_probs = run_epoch(
-        model, test_loader, criterion, None, device
-    )
-    test_metrics = calculate_metrics(test_targets, test_probs)
-
-    results = {
-        "test_loss": test_loss,
-        "test_macro_f1": test_metrics["macro_f1"],
-        "test_per_class_f1": test_metrics["per_class_f1"],
-        "checkpoint_epoch": checkpoint["epoch"],
-        "superclasses": list(SUPERCLASSES),
-        "test_fold": 10,
-        "test_auc_macro": test_metrics["macro_auc"],
-        "test_auc_micro": test_metrics["micro_auc"],
-        "test_per_class_auc": test_metrics["per_class_auc"],
+    summary = {
+        "best_epoch": checkpoint["epoch"],
+        "best_val_loss": best_val_loss,
+        "best_val_auc_macro": checkpoint.get("val_auc_macro", float("nan")),
+        "best_val_auc_micro": checkpoint.get("val_auc_micro", float("nan")),
     }
-    with (output_dir / "test_metrics.json").open("w", encoding="utf-8") as file:
-        json.dump(results, file, ensure_ascii=False, indent=2)
-    tracker.log_artifact(str(output_dir / "test_metrics.json"), "metrics")
-    tracker.log_summary(
-        {
-            "best_epoch": checkpoint["epoch"],
-            "best_val_loss": best_val_loss,
+
+    if test_loader is not None:
+        # Evaluate the selected checkpoint on the test fold only after training.
+        test_loss, test_targets, test_probs = run_epoch(
+            model, test_loader, criterion, None, device
+        )
+        test_metrics = calculate_metrics(test_targets, test_probs)
+
+        results = {
             "test_loss": test_loss,
+            "test_macro_f1": test_metrics["macro_f1"],
+            "test_per_class_f1": test_metrics["per_class_f1"],
+            "checkpoint_epoch": checkpoint["epoch"],
+            "superclasses": list(SUPERCLASSES),
+            "test_fold": 10,
             "test_auc_macro": test_metrics["macro_auc"],
             "test_auc_micro": test_metrics["micro_auc"],
-            "best_val_auc_macro": checkpoint.get("val_auc_macro", float("nan")),
-            "best_val_auc_micro": checkpoint.get("val_auc_micro", float("nan")),
-            "test_macro_f1": test_metrics["macro_f1"],
-            **{
-                f"test_f1_{name}": score
-                for name, score in test_metrics["per_class_f1"].items()
-            },
+            "test_per_class_auc": test_metrics["per_class_auc"],
         }
-    )
-    # Model đã nạp checkpoint tốt nhất ở trên; log lên MLflow ở dạng logits.
-    tracker.log_model(model, input_shape=INPUT_SHAPE)
+        with (output_dir / "test_metrics.json").open("w", encoding="utf-8") as file:
+            json.dump(results, file, ensure_ascii=False, indent=2)
+        tracker.log_artifact(str(output_dir / "test_metrics.json"), "metrics")
+        summary.update(
+            {
+                "test_loss": test_loss,
+                "test_auc_macro": test_metrics["macro_auc"],
+                "test_auc_micro": test_metrics["micro_auc"],
+                "test_macro_f1": test_metrics["macro_f1"],
+                **{
+                    f"test_f1_{name}": score
+                    for name, score in test_metrics["per_class_f1"].items()
+                },
+            }
+        )
 
-    print("\nTest results (fold 10):")
-    print(f"test_loss={test_loss:.4f}")
-    print(f"test_macro_f1={test_metrics['macro_f1']:.4f}")
-    for name, score in test_metrics["per_class_f1"].items():
-        print(f"  {name}: F1={score:.4f}")
+    tracker.log_summary(summary)
+    if log_model:
+        # Model đã nạp checkpoint tốt nhất ở trên; log lên MLflow ở dạng logits.
+        tracker.log_model(model, input_shape=INPUT_SHAPE)
+
+    if test_loader is not None:
+        print("\nTest results (fold 10):")
+        print(f"test_loss={test_loss:.4f}")
+        print(f"test_macro_f1={test_metrics['macro_f1']:.4f}")
+        for name, score in test_metrics["per_class_f1"].items():
+            print(f"  {name}: F1={score:.4f}")
 
     print(f"\nCheckpoint: {checkpoint_path}")
     print(f"History: {output_dir / 'history.json'}")
-    print(f"Test metrics: {output_dir / 'test_metrics.json'}")
+    if test_loader is not None:
+        print(f"Test metrics: {output_dir / 'test_metrics.json'}")
     print(f"MLflow run: {tracker.run_id}")
+    return summary
 
 
 if __name__ == "__main__":

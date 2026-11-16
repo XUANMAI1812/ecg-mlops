@@ -14,6 +14,7 @@ outputs/
 *.log
 reports/
 mlflow_data/
+optuna_data/
 
 # Local model training artifacts
 artifacts/
