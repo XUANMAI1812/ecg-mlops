@@ -1,0 +1,8 @@
+# Chỉ đưa vào build context những gì image cần. Mọi thứ khác (data/, .venv/,
+# mlflow_data/, artifacts/, optuna_data/, .env, .git/) bị loại.
+*
+!requirements/
+!src/
+!scripts/
+**/__pycache__/
+**/*.pyc
