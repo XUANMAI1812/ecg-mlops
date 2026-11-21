@@ -1,10 +1,19 @@
 """Đánh giá model đã log trong một run MLflow trên một fold của PTB-XL.
 
 Mặc định đánh giá fold 9 (validation). Fold 10 (test) chỉ dùng cho đánh giá cuối,
-nên phải truyền --allow-test.
+nên phải truyền --allow-test. Kết quả (AUC, F1, confusion matrix theo từng lớp)
+ghi thành artifact evaluation/<split>.json trong chính run đó; không ghi thêm
+metric nào vào run.
 
-Có thể sử dụng ngưỡng D7 riêng cho từng lớp bằng --thresholds.
-Nếu không truyền file ngưỡng, mặc định vẫn dùng 0.5.
+Ngưỡng mặc định 0,5 cho mọi lớp. Truyền --thresholds <file.json> để dùng ngưỡng
+D7 riêng cho từng lớp (chọn trên fold 9); trường run_id trong file phải trùng
+--run-id.
+
+Ví dụ (từ gốc repo, venv đã kích hoạt, MLflow server đang chạy):
+    PYTHONPATH=src python -m ecg.train.evaluate --run-id <run_id>
+    PYTHONPATH=src python -m ecg.train.evaluate --run-id <run_id> --sample-n 200
+    PYTHONPATH=src python -m ecg.train.evaluate --run-id <run_id> \
+        --split test --allow-test --thresholds thresholds.json
 """
 
 from __future__ import annotations
@@ -26,9 +35,8 @@ from ecg.data.dataset import ECGDataset
 from ecg.data.labels import SUPERCLASSES
 from ecg.models.train import DEFAULT_TRACKING_URI, calculate_metrics
 
-
 SPLIT_FOLDS = {"val": (9,), "test": (10,)}
-THRESHOLD = 0.5
+THRESHOLD = 0.5  # ngưỡng mặc định khi không truyền --thresholds
 
 
 def select_thresholds(
@@ -91,9 +99,7 @@ def select_thresholds(
 
         best_f1 = max(score for _, score in scores)
         candidates = [
-            item
-            for item in scores
-            if np.isclose(item[1], best_f1, atol=1e-12, rtol=0)
+            item for item in scores if np.isclose(item[1], best_f1, atol=1e-12, rtol=0)
         ]
 
         best_threshold, _ = min(
@@ -108,7 +114,7 @@ def select_thresholds(
 def _validate_thresholds(thresholds: dict[str, float]) -> dict[str, float]:
     """Kiểm tra file ngưỡng có đủ lớp và giá trị hợp lệ."""
     if not isinstance(thresholds, dict):
-        raise ValueError("thresholds phải là một JSON object.")
+        raise TypeError("thresholds phải là một JSON object.")
 
     expected_classes = set(SUPERCLASSES)
     actual_classes = set(thresholds)
@@ -127,22 +133,24 @@ def _validate_thresholds(thresholds: dict[str, float]) -> dict[str, float]:
         value = thresholds[class_name]
 
         if isinstance(value, bool) or not isinstance(value, (int, float)):
-            raise ValueError(f"Ngưỡng của {class_name} phải là số.")
+            raise TypeError(f"Ngưỡng của {class_name} phải là số.")
 
         value = float(value)
 
         if not math.isfinite(value) or not 0 <= value <= 1:
-            raise ValueError(
-                f"Ngưỡng của {class_name} phải nằm trong khoảng [0, 1]."
-            )
+            raise ValueError(f"Ngưỡng của {class_name} phải nằm trong khoảng [0, 1].")
 
         validated[class_name] = value
 
     return validated
 
 
-def _load_thresholds(path: str | Path) -> dict[str, float]:
-    """Đọc ngưỡng D7 từ file JSON."""
+def _load_thresholds(path: str | Path, run_id: str | None = None) -> dict[str, float]:
+    """Đọc ngưỡng D7 từ file JSON.
+
+    Nếu truyền run_id, trường run_id trong file phải trùng để tránh dùng nhầm
+    ngưỡng của model khác.
+    """
     try:
         content = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -150,6 +158,11 @@ def _load_thresholds(path: str | Path) -> dict[str, float]:
 
     if not isinstance(content, dict) or "thresholds" not in content:
         raise ValueError("File JSON phải chứa trường 'thresholds'.")
+
+    if run_id is not None and content.get("run_id") != run_id:
+        raise ValueError(
+            f"run_id trong file ngưỡng ({content.get('run_id')}) khác --run-id ({run_id})."
+        )
 
     return _validate_thresholds(content["thresholds"])
 
@@ -280,6 +293,8 @@ def predict_probabilities(model, dataset: ECGDataset, batch_size: int):
     all_probabilities = []
 
     for signals, targets in loader:
+        # torch.sigmoid trên float32, giống run_epoch trong train.py, để kết quả
+        # khớp đúng metric val đã log khi train.
         logits = torch.as_tensor(np.asarray(model.predict(signals.numpy())))
         all_targets.append(targets.numpy())
         all_probabilities.append(torch.sigmoid(logits).numpy())
@@ -291,7 +306,7 @@ def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
 
     thresholds = (
-        _load_thresholds(args.thresholds)
+        _load_thresholds(args.thresholds, args.run_id)
         if args.thresholds is not None
         else None
     )

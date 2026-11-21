@@ -1,4 +1,3 @@
-
 import json
 
 import numpy as np
@@ -38,18 +37,10 @@ def test_evaluate_predictions_counts_confusion_matrix_per_class():
 
     assert result["n_records"] == 4
     assert result["threshold"] == 0.5
-    assert result["thresholds"] == {
-        name: 0.5 for name in SUPERCLASSES
-    }
-    assert result["confusion_matrix"]["NORM"] == {
-        "tn": 1, "fp": 1, "fn": 1, "tp": 1
-    }
-    assert result["confusion_matrix"]["MI"] == {
-        "tn": 2, "fp": 0, "fn": 0, "tp": 2
-    }
-    assert result["confusion_matrix"]["HYP"] == {
-        "tn": 4, "fp": 0, "fn": 0, "tp": 0
-    }
+    assert result["thresholds"] == {name: 0.5 for name in SUPERCLASSES}
+    assert result["confusion_matrix"]["NORM"] == {"tn": 1, "fp": 1, "fn": 1, "tp": 1}
+    assert result["confusion_matrix"]["MI"] == {"tn": 2, "fp": 0, "fn": 0, "tp": 2}
+    assert result["confusion_matrix"]["HYP"] == {"tn": 4, "fp": 0, "fn": 0, "tp": 0}
     assert set(result["per_class_f1"]) == set(SUPERCLASSES)
     assert result["auc_micro"] is not None
 
@@ -154,7 +145,7 @@ def test_validate_thresholds_rejects_invalid_values(invalid_value):
     thresholds = {name: 0.5 for name in SUPERCLASSES}
     thresholds[SUPERCLASSES[0]] = invalid_value
 
-    with pytest.raises(ValueError):
+    with pytest.raises((TypeError, ValueError)):
         _validate_thresholds(thresholds)
 
 
@@ -169,6 +160,19 @@ def test_load_thresholds_reads_json(tmp_path):
     assert _load_thresholds(path) == expected
 
 
+def test_load_thresholds_checks_run_id(tmp_path):
+    thresholds = {name: 0.5 for name in SUPERCLASSES}
+    path = tmp_path / "thresholds.json"
+    path.write_text(
+        json.dumps({"run_id": "abc", "thresholds": thresholds}),
+        encoding="utf-8",
+    )
+
+    assert _load_thresholds(path, "abc") == thresholds
+    with pytest.raises(ValueError, match="run_id"):
+        _load_thresholds(path, "xyz")
+
+
 def test_parse_args_accepts_thresholds_file():
     args = parse_args(
         [
@@ -180,6 +184,7 @@ def test_parse_args_accepts_thresholds_file():
     )
 
     assert args.thresholds == "thresholds.json"
+
 
 def test_select_thresholds_rejects_non_binary_targets():
     targets = np.zeros((2, len(SUPERCLASSES)), dtype=np.float32)
