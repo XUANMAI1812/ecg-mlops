@@ -629,3 +629,31 @@ docker rm -f ecg-api
 ```
 
 `/health` trả `{"status":"ok"}`; trạng thái health chuyển sang `healthy` sau khoảng 30 giây. Cổng chỉ mở trên `127.0.0.1` của máy.
+
+## 16. Kiểm tra tự động (GitHub Actions)
+
+Workflow `.github/workflows/ci.yml` chạy trên mọi Pull Request vào `main` và mọi lần push lên
+`main`. Job `lint-test` gồm:
+
+| Bước | Lệnh |
+|---|---|
+| Cài thư viện | torch bản CPU từ `https://download.pytorch.org/whl/cpu`, sau đó `requirements/dev.txt`, rồi `pip check` |
+| Code style | `ruff check src tests scripts flows` |
+| Định dạng | `ruff format --check src tests scripts flows` |
+| Test | `PYTHONPATH=src pytest -q` |
+
+Test dùng dữ liệu giả lập và MLflow SQLite trong thư mục tạm, nên CI không cần dữ liệu PTB-XL,
+không cần MLflow server và không dùng secret nào.
+
+Nhánh `main` được bảo vệ: chỉ thay đổi qua Pull Request, và check `lint-test` phải xanh thì mới
+merge được. Trước khi push, chạy cùng các lệnh trên ở máy (venv đã kích hoạt):
+
+```bash
+export MLFLOW_DISABLE_TELEMETRY=true DO_NOT_TRACK=1
+ruff check src tests scripts flows
+ruff format --check src tests scripts flows
+PYTHONPATH=src pytest -q
+```
+
+Nếu `ruff` báo lỗi định dạng, chạy `ruff format src tests scripts flows` rồi commit lại. Lỗi
+`ruff check` có dấu `[*]` sửa được bằng `ruff check --fix src tests scripts flows`.
