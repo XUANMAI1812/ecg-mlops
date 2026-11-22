@@ -1,6 +1,9 @@
-# Kiểm tra tự động cho mọi Pull Request vào main và mọi lần push lên main:
-# code style (ruff) và toàn bộ test (pytest). Test dùng dữ liệu giả lập,
-# không cần dữ liệu PTB-XL. Mô tả chi tiết: docs/setup.md mục 16.
+# Kiểm tra tự động cho mọi Pull Request vào main và mọi lần push lên main.
+# - lint-test: code style (ruff) và toàn bộ test (pytest). Test dùng dữ liệu giả
+#   lập, không cần dữ liệu PTB-XL.
+# - docker: hadolint kiểm tra Dockerfile; build image train và serve; Trivy quét
+#   lỗ hổng image. Image không push lên registry.
+# Mô tả chi tiết: docs/setup.md mục 16.
 name: CI
 
 on:
@@ -61,3 +64,118 @@ jobs:
         env:
           PYTHONPATH: src
         run: pytest -q
+
+  docker:
+    name: docker
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      HADOLINT_VERSION: v2.15.1
+      HADOLINT_SHA256: c7187db94eeeeca956519a6af171adc31453941a1e777961f6e680f697c8c507
+      TRIVY_VERSION: 0.76.2
+      TRIVY_SHA256: bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf
+    steps:
+      - name: Lấy mã nguồn
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Cài hadolint
+        run: |
+          curl -sSfL -o /tmp/hadolint \
+            "https://github.com/hadolint/hadolint/releases/download/${HADOLINT_VERSION}/hadolint-linux-x86_64"
+          echo "${HADOLINT_SHA256}  /tmp/hadolint" | sha256sum -c -
+          chmod +x /tmp/hadolint
+          /tmp/hadolint --version
+
+      # Chỉ lỗi mức error làm job đỏ; warning, info chỉ hiện trong log.
+      - name: Kiểm tra Dockerfile (hadolint)
+        run: /tmp/hadolint --failure-threshold error docker/Dockerfile.train docker/Dockerfile.serve
+
+      # PR không đổi file nào đi vào image thì bỏ qua build và quét, job vẫn xanh.
+      # Push lên main luôn build.
+      - name: Xác định có cần build image không
+        id: changes
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [ "${EVENT_NAME}" != "pull_request" ]; then
+            echo "Push lên main: build image."
+            echo "build=true" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          CHANGED="$(git diff --name-only "${BASE_SHA}...${HEAD_SHA}")"
+          echo "File thay đổi trong PR:"
+          echo "${CHANGED}"
+          if echo "${CHANGED}" | grep -qE '^(docker/|requirements/|src/|scripts/|\.dockerignore$|\.github/workflows/ci\.yml$)'; then
+            echo "build=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "Không đổi file nào đi vào image: bỏ qua build và quét."
+            echo "build=false" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Build image huấn luyện
+        if: steps.changes.outputs.build == 'true'
+        run: |
+          df -h /
+          docker build -f docker/Dockerfile.train -t ecg-train:ci .
+
+      - name: Build image serving
+        if: steps.changes.outputs.build == 'true'
+        run: |
+          docker build -f docker/Dockerfile.serve -t ecg-serve:ci .
+          docker image ls "ecg-*"
+          df -h /
+
+      - name: Kiểm tra torch bản CPU trong image
+        if: steps.changes.outputs.build == 'true'
+        run: |
+          docker run --rm --entrypoint python ecg-train:ci \
+            -c "import torch; print('torch', torch.__version__, 'cuda', torch.version.cuda)"
+
+      - name: Cài Trivy
+        if: steps.changes.outputs.build == 'true'
+        run: |
+          curl -sSfL -o /tmp/trivy.tgz \
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          echo "${TRIVY_SHA256}  /tmp/trivy.tgz" | sha256sum -c -
+          tar -xzf /tmp/trivy.tgz -C /tmp trivy
+          /tmp/trivy --version
+
+      # Giai đoạn đo: chỉ báo cáo lỗ hổng CRITICAL và HIGH, không làm job đỏ.
+      # Sau khi có số liệu, nhóm chốt ngưỡng chặn (docs/setup.md mục 16).
+      - name: Quét lỗ hổng image (Trivy, chỉ báo cáo)
+        if: steps.changes.outputs.build == 'true'
+        run: |
+          for IMAGE in ecg-train:ci ecg-serve:ci; do
+            NAME="${IMAGE%%:*}"
+            /tmp/trivy image --quiet --scanners vuln --severity CRITICAL,HIGH \
+              --format json --output "/tmp/${NAME}.json" "${IMAGE}"
+            echo "== ${IMAGE}"
+            /tmp/trivy convert --format table "/tmp/${NAME}.json"
+            python3 - "${IMAGE}" "/tmp/${NAME}.json" <<'PY_EOF' | tee -a "${GITHUB_STEP_SUMMARY}"
+          import collections
+          import json
+          import sys
+
+          image, path = sys.argv[1], sys.argv[2]
+          with open(path, encoding="utf-8") as file:
+              data = json.load(file)
+          count = collections.Counter()
+          for result in data.get("Results") or []:
+              for vuln in result.get("Vulnerabilities") or []:
+                  fixed = "co_ban_va" if vuln.get("FixedVersion") else "chua_co_ban_va"
+                  count[(vuln["Severity"], fixed)] += 1
+          print(f"### Trivy: {image}")
+          print("| Mức | Có bản vá | Chưa có bản vá |")
+          print("|---|---|---|")
+          for severity in ("CRITICAL", "HIGH"):
+              print(
+                  f"| {severity} | {count[(severity, 'co_ban_va')]} "
+                  f"| {count[(severity, 'chua_co_ban_va')]} |"
+              )
+          PY_EOF
+          done

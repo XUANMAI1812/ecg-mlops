@@ -633,7 +633,9 @@ docker rm -f ecg-api
 ## 16. Kiểm tra tự động (GitHub Actions)
 
 Workflow `.github/workflows/ci.yml` chạy trên mọi Pull Request vào `main` và mọi lần push lên
-`main`. Job `lint-test` gồm:
+`main`, gồm 2 job chạy song song.
+
+Job `lint-test`:
 
 | Bước | Lệnh |
 |---|---|
@@ -645,8 +647,25 @@ Workflow `.github/workflows/ci.yml` chạy trên mọi Pull Request vào `main` 
 Test dùng dữ liệu giả lập và MLflow SQLite trong thư mục tạm, nên CI không cần dữ liệu PTB-XL,
 không cần MLflow server và không dùng secret nào.
 
-Nhánh `main` được bảo vệ: chỉ thay đổi qua Pull Request, và check `lint-test` phải xanh thì mới
-merge được. Trước khi push, chạy cùng các lệnh trên ở máy (venv đã kích hoạt):
+Job `docker`:
+
+| Bước | Nội dung |
+|---|---|
+| hadolint | Kiểm tra `docker/Dockerfile.train`, `docker/Dockerfile.serve`; chỉ lỗi mức error làm job đỏ |
+| Build | Build `ecg-train:ci` và `ecg-serve:ci` (mục 15); image không push lên registry |
+| Kiểm tra torch | Image train phải có torch bản `+cpu`, `cuda None` |
+| Trivy | Quét lỗ hổng CRITICAL và HIGH của 2 image; bảng tóm tắt hiện ở trang Summary của lần chạy |
+
+Với Pull Request, job `docker` chỉ build và quét khi PR đổi `docker/`, `requirements/`, `src/`,
+`scripts/`, `.dockerignore` hoặc `.github/workflows/ci.yml`; PR khác chỉ chạy hadolint, job
+vẫn xanh. Push lên `main` luôn build và quét. hadolint và Trivy tải bản phát hành cố định từ
+GitHub và kiểm tra SHA-256 trước khi chạy.
+
+Trivy hiện chỉ báo cáo, chưa làm job đỏ. Ngưỡng chặn được chốt sau khi có số liệu từ các lần
+chạy đầu.
+
+Nhánh `main` được bảo vệ: chỉ thay đổi qua Pull Request, và các check bắt buộc phải xanh thì mới
+merge được. Trước khi push, chạy cùng các lệnh của `lint-test` ở máy (venv đã kích hoạt):
 
 ```bash
 export MLFLOW_DISABLE_TELEMETRY=true DO_NOT_TRACK=1
