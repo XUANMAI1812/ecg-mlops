@@ -145,8 +145,7 @@ jobs:
           tar -xzf /tmp/trivy.tgz -C /tmp trivy
           /tmp/trivy --version
 
-      # Giai đoạn đo: chỉ báo cáo lỗ hổng CRITICAL và HIGH, không làm job đỏ.
-      # Sau khi có số liệu, nhóm chốt ngưỡng chặn (docs/setup.md mục 16).
+      # Báo cáo lỗ hổng CRITICAL và HIGH; bước chặn ở cuối job (docs/setup.md mục 16).
       - name: Quét lỗ hổng image (Trivy, chỉ báo cáo)
         if: steps.changes.outputs.build == 'true'
         run: |
@@ -178,4 +177,13 @@ jobs:
                   f"| {count[(severity, 'chua_co_ban_va')]} |"
               )
           PY_EOF
+          done
+
+      # Chặn: lỗ hổng CRITICAL đã có bản vá làm job đỏ (W6, chốt 2026-11-22).
+      - name: Chặn lỗ hổng CRITICAL có bản vá (Trivy)
+        if: steps.changes.outputs.build == 'true'
+        run: |
+          for IMAGE in ecg-train:ci ecg-serve:ci; do
+            /tmp/trivy image --quiet --scanners vuln --severity CRITICAL \
+              --ignore-unfixed --exit-code 1 "${IMAGE}"
           done
