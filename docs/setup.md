@@ -661,8 +661,10 @@ Với Pull Request, job `docker` chỉ build và quét khi PR đổi `docker/`, 
 vẫn xanh. Push lên `main` luôn build và quét. hadolint và Trivy tải bản phát hành cố định từ
 GitHub và kiểm tra SHA-256 trước khi chạy.
 
-Trivy hiện chỉ báo cáo, chưa làm job đỏ. Ngưỡng chặn được chốt sau khi có số liệu từ các lần
-chạy đầu.
+Trivy chặn lỗ hổng CRITICAL đã có bản vá: có lỗ hổng như vậy thì job `docker` đỏ. Lỗ hổng HIGH
+và lỗ hổng chưa có bản vá chỉ báo cáo ở trang Summary. Ngưỡng chốt 2026-11-22 theo số liệu lần
+chạy đầu: cả 2 image có CRITICAL có bản vá 0, HIGH có bản vá 4 (chi tiết ở bảng trong log
+bước quét).
 
 Nhánh `main` được bảo vệ: chỉ thay đổi qua Pull Request, và các check bắt buộc phải xanh thì mới
 merge được. Trước khi push, chạy cùng các lệnh của `lint-test` ở máy (venv đã kích hoạt):
