@@ -678,3 +678,31 @@ PYTHONPATH=src pytest -q
 
 Nếu `ruff` báo lỗi định dạng, chạy `ruff format src tests scripts flows` rồi commit lại. Lỗi
 `ruff check` có dấu `[*]` sửa được bằng `ruff check --fix src tests scripts flows`.
+
+## 17. Đăng ký model vào Model Registry
+
+Model dùng cho serving lấy từ Model Registry của MLflow, tên `ecg_classifier`, qua alias:
+`staging` (bản đang thử) và `production` (bản chạy demo). Không dùng stage (MLflow đã bỏ từ 2.9).
+
+`scripts/register_model.py` đăng ký logged model của một run trong experiment
+`ecg-superdiagnostic` và gắn alias. Cần file ngưỡng của đúng run đó (JSON có trường `run_id` và
+`thresholds`, chọn trên fold 9). Script làm 4 việc:
+1. Kiểm tra `run_id` trong file ngưỡng trùng `--run-id`.
+2. Ghi ngưỡng vào run thành artifact `serving/thresholds.json`.
+3. Đăng ký model thành một version mới; run đã đăng ký trước đó thì dùng lại version cũ.
+4. Gắn tag `thresholds_artifact` cho version và chuyển alias sang version đó.
+
+Cần MLflow server đang chạy (mục 9). Từ gốc repo, venv đã kích hoạt:
+
+```bash
+export MLFLOW_DISABLE_TELEMETRY=true
+PYTHONPATH=src python scripts/register_model.py --run-id <run_id> --thresholds <file ngưỡng>
+# Chuyển alias production sang version của cùng run
+PYTHONPATH=src python scripts/register_model.py --run-id <run_id> --thresholds <file ngưỡng> --alias production
+```
+
+Kết quả in dòng `Model: models:/ecg_classifier@staging -> version <N>`. Trên giao diện MLflow,
+mục Models, `ecg_classifier`: version mang alias và tag `thresholds_artifact`.
+
+Mỗi lần train lại: chọn lại ngưỡng trên fold 9 cho run mới, rồi đăng ký run mới. Version cũ vẫn
+nằm trong Registry, chuyển alias về version cũ là quay lại được.
